@@ -66,7 +66,7 @@ public class JwksFetcher {
         }
         // Force-refresh once in case the verifier rotated keys
         if (entry.lastRefreshed.plus(MIN_RETRY).isBefore(clock.instant())) {
-            CacheEntry fresh = refresh();
+            CacheEntry fresh = refreshAndCache();
             JWK refreshed = fresh.set.getKeyByKeyId(kid);
             if (refreshed != null) {
                 return refreshed;
@@ -114,7 +114,11 @@ public class JwksFetcher {
         }
     }
 
-    private CacheEntry refresh() {
+    // Renamed from `refresh` to avoid clashing with the public refresh() above
+    // which returns JWKSet. Both call refreshInternal() under the hood and both
+    // update the cache; the private one returns the CacheEntry for callers that
+    // need access to the refresh timestamp.
+    private CacheEntry refreshAndCache() {
         CacheEntry entry = refreshInternal();
         cache.set(entry);
         return entry;
