@@ -1,0 +1,8 @@
+server:
+  port: 8080
+
+rootherald:
+  issuer: https://rootherald.io/demo
+  audience: demo-rp
+  base-uri: https://rootherald.io
+  mode: offline
