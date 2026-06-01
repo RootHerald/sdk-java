@@ -52,17 +52,9 @@
             <version>6.1.5</version>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-web</artifactId>
-            <version>6.1.5</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-webmvc</artifactId>
-            <version>6.1.5</version>
-            <scope>test</scope>
-        </dependency>
+        <!-- spring-web and spring-webmvc come in transitively from
+             spring-boot-starter-web at compile scope; declaring them
+             explicitly as test-scope here would demote them to test-only
+             and break the filter's compile. -->
     </dependencies>
 </project>
