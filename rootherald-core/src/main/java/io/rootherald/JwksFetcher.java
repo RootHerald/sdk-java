@@ -77,9 +77,7 @@ public class JwksFetcher {
 
     /** Force a refresh (used by tests and during retry-after-rotation). */
     public JWKSet refresh() {
-        CacheEntry entry = fetch();
-        cache.set(entry);
-        return entry.set;
+        return refreshAndCache().set;
     }
 
     /** Returns the cached JWKSet without forcing a refresh — for diagnostics. */
@@ -105,7 +103,7 @@ public class JwksFetcher {
 
     private CacheEntry refreshOrFallback(CacheEntry previous) {
         try {
-            return refreshInternal();
+            return refreshAndCache();
         } catch (RootHeraldException ex) {
             if (previous != null) {
                 return previous;
@@ -114,18 +112,10 @@ public class JwksFetcher {
         }
     }
 
-    // Renamed from `refresh` to avoid clashing with the public refresh() above
-    // which returns JWKSet. Both call refreshInternal() under the hood and both
-    // update the cache; the private one returns the CacheEntry for callers that
-    // need access to the refresh timestamp.
     private CacheEntry refreshAndCache() {
         CacheEntry entry = refreshInternal();
         cache.set(entry);
         return entry;
-    }
-
-    private CacheEntry fetch() {
-        return refreshInternal();
     }
 
     private CacheEntry refreshInternal() {
