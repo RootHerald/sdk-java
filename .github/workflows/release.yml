@@ -1,0 +1,41 @@
+name: Release
+
+# Publishing to Maven Central via OSSRH / Sonatype Central Portal.
+# Requires OSSRH_USERNAME, OSSRH_TOKEN, and MAVEN_GPG_PRIVATE_KEY + passphrase
+# secrets (or use Sonatype Central Portal's user tokens with their newer flow).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - run: mvn -B -ntp verify
+
+      - run: mvn -B -ntp -P release deploy
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
