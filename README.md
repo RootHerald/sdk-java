@@ -1,6 +1,9 @@
 # Root Herald — Java SDK
 
-Verify [Root Herald](https://rootherald.io) device-attestation JWTs from a Java backend. Plain Java + Spring Boot. Requires Java 17+.
+[Root Herald](https://rootherald.io) device attestation from a Java backend. Plain Java + Spring Boot. Requires Java 17+. Two paths:
+
+- **Background-Check (server → server)** — `BackgroundCheckClient`: your dumb client collects an opaque evidence blob and hands it to *your* server, which appraises it with Root Herald using your `rh_sk_` secret key. The client never holds a key or talks to Root Herald.
+- **Badge tier (offline verify)** — `RootHeraldClient.verifyOffline` + the Spring guard: verify a Root Herald-issued EAT (JWT) against the cached JWKS.
 
 ## Install
 
@@ -14,7 +17,33 @@ Verify [Root Herald](https://rootherald.io) device-attestation JWTs from a Java 
 
 For Spring Boot, depend on `io.rootherald:rootherald-spring` instead.
 
-## Verify a token
+## Background-Check (server → server)
+
+```java
+// Construct with your SECRET key (rh_sk_…). A publishable key (rh_pk_…) is
+// rejected — it must never be used server-side.
+var rh = BackgroundCheckClient.builder()
+    .secretKey(System.getenv("ROOTHERALD_SECRET_KEY"))
+    .build();
+
+// 1) Mint a relay-friendly nonce; send challenge.nonce() down to the client.
+Challenge challenge = rh.createChallenge();
+
+// 2) The client quotes over the nonce and returns an opaque evidence blob
+//    (JSON); submit it for appraisal.
+AttestResult result = rh.attest(evidence, AttestOptions.of(challenge.challengeId())
+    .policy("rootherald:builtin:strict-hardware") // optional
+    .returnToken(true));                          // optional signed EAT
+
+if (!result.isAllowed()) {
+    response.setStatus(403);
+    return;
+}
+```
+
+An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw — `InvalidSecretKeyException` (401), `UnknownPolicyException` (422), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+
+## Verify a token (badge tier)
 
 ```java
 var client = RootHeraldClient.builder()
@@ -31,7 +60,7 @@ if (!result.isAllowed()) {
 String deviceId = result.claims().subject();
 ```
 
-`verifyOffline` checks the JWT locally against the cached JWKS. Use `verifyOnline(token, action)` when you want server-side policy (revocation, risk score).
+`verifyOffline` checks the JWT locally against the cached JWKS. (The legacy `verifyOnline(token, action)` is deprecated — it targets a self-hosted service absent on the stock Root Herald deployment; use `BackgroundCheckClient` instead.)
 
 ## Spring Boot
 
