@@ -2,6 +2,9 @@ package io.rootherald.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * The result of {@link BackgroundCheckClient#attest(String, AttestOptions)}:
  * the device verdict, the full verdict node, and an optional signed EAT (JWT)
@@ -16,6 +19,69 @@ public record AttestResult(String verdict, JsonNode verdictNode, String token) {
     /** True when the verdict is {@code "allow"}. */
     public boolean isAllowed() {
         return "allow".equalsIgnoreCase(verdict);
+    }
+
+    /**
+     * The raw {@code device} sub-object of the verdict, or a missing node. The
+     * cohort getters below read from here.
+     */
+    private JsonNode device() {
+        return verdictNode == null ? null : verdictNode.path("device");
+    }
+
+    /**
+     * Opaque cohort key, or {@code null} if the server did not return one.
+     * <p>
+     * Cohort fields are ADDITIVE and advisory only (never a trust gate). The
+     * server populates them on {@code verdict.device} (camelCase) when a
+     * quote-bound event log was supplied, and omits them otherwise.
+     */
+    public String cohortKey() {
+        JsonNode d = device();
+        return d != null && d.hasNonNull("cohortKey") ? d.get("cohortKey").asText() : null;
+    }
+
+    /** Cohort comparison scope ({@code "global"} | {@code "tenant-fleet"}), or {@code null}. */
+    public String cohortScope() {
+        JsonNode d = device();
+        return d != null && d.hasNonNull("cohortScope") ? d.get("cohortScope").asText() : null;
+    }
+
+    /** Fraction of the cohort sharing this profile, or {@code null} if unknown/absent. */
+    public Double cohortPrevalence() {
+        JsonNode d = device();
+        return d != null && d.hasNonNull("cohortPrevalence") ? d.get("cohortPrevalence").asDouble() : null;
+    }
+
+    /**
+     * Per-PCR prevalence map (PCR index → fraction). Empty if absent.
+     *
+     * @return a map; never {@code null}
+     */
+    public Map<String, Double> cohortPrevalencePerPcr() {
+        Map<String, Double> out = new LinkedHashMap<>();
+        JsonNode d = device();
+        JsonNode m = d == null ? null : d.get("cohortPrevalencePerPcr");
+        if (m != null && m.isObject()) {
+            m.fields().forEachRemaining(e -> {
+                if (e.getValue().isNumber()) {
+                    out.put(e.getKey(), e.getValue().asDouble());
+                }
+            });
+        }
+        return out;
+    }
+
+    /** Number of devices in the cohort sample, or {@code null} if unknown/absent. */
+    public Long cohortSampleSize() {
+        JsonNode d = device();
+        return d != null && d.hasNonNull("cohortSampleSize") ? d.get("cohortSampleSize").asLong() : null;
+    }
+
+    /** Whether this is a previously-unseen profile, or {@code null} if not evaluated. */
+    public Boolean novelProfile() {
+        JsonNode d = device();
+        return d != null && d.hasNonNull("novelProfile") ? d.get("novelProfile").asBoolean() : null;
     }
 
     /**
