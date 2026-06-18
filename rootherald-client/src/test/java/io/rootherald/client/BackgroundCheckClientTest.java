@@ -97,6 +97,36 @@ class BackgroundCheckClientTest {
     }
 
     @Test
+    void exposesCohortFields() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\",\"device\":{"
+                        + "\"cohortKey\":\"tpm20:win11:sb1:abc123\","
+                        + "\"cohortScope\":\"tenant-fleet\","
+                        + "\"cohortPrevalence\":0.042,"
+                        + "\"cohortPrevalencePerPcr\":{\"0\":0.9,\"7\":0.5},"
+                        + "\"cohortSampleSize\":1287,"
+                        + "\"novelProfile\":false}}}");
+        AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
+        assertEquals("tpm20:win11:sb1:abc123", result.cohortKey());
+        assertEquals("tenant-fleet", result.cohortScope());
+        assertEquals(0.042, result.cohortPrevalence());
+        assertEquals(0.5, result.cohortPrevalencePerPcr().get("7"));
+        assertEquals(1287L, result.cohortSampleSize());
+        assertEquals(Boolean.FALSE, result.novelProfile());
+    }
+
+    @Test
+    void cohortFieldsNullWhenAbsent() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
+        AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
+        assertNull(result.cohortKey());
+        assertNull(result.cohortPrevalence());
+        assertNull(result.novelProfile());
+        assertTrue(result.cohortPrevalencePerPcr().isEmpty());
+    }
+
+    @Test
     void failVerdictIsNotAnError() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"verdict\":\"fail\"}}");

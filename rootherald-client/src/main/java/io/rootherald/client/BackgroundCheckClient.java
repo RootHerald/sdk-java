@@ -41,7 +41,7 @@ import java.util.Objects;
 public final class BackgroundCheckClient {
 
     /** Production RootHerald API base URL. */
-    public static final String DEFAULT_BASE_URL = "https://api.rootherald.com";
+    public static final String DEFAULT_BASE_URL = "https://api.rootherald.io";
 
     private static final String SECRET_KEY_PREFIX = "rh_sk_";
 
