@@ -19,13 +19,16 @@ import java.util.Objects;
 /**
  * High-level REST client for the RootHerald verifier service.
  * <p>
- * Two verification flows are supported:
+ * This is the badge-tier (offline verify) client. For the server -&gt; server
+ * appraisal of a client-collected evidence blob, use
+ * {@link BackgroundCheckClient} instead.
  * <ul>
  *   <li>{@link #verifyOffline(String)} — verifies the JWT locally using the cached JWKS.
  *       No network call once the JWKS is warmed up; suitable for hot signup paths.</li>
- *   <li>{@link #verifyOnline(String, String)} — POSTs the token to the verifier so it can
- *       run server-side policy checks (revocation, risk score). Use this when policy
- *       freshness matters more than latency.</li>
+ *   <li>{@link #verifyOnline(String, String)} — DEPRECATED: targets a self-hosted
+ *       {@code /api/v1/verify} service that does not exist on the stock RootHerald
+ *       deployment. Use {@link BackgroundCheckClient} for server -&gt; server
+ *       appraisal, or {@link #verifyOffline(String)} for badge checks.</li>
  * </ul>
  */
 public final class RootHeraldClient {
@@ -59,7 +62,15 @@ public final class RootHeraldClient {
         return new VerifyResult("allow", "offline-verified", -1.0, claims);
     }
 
-    /** POST the token to the verifier endpoint and return the verdict. */
+    /**
+     * POST the token to the verifier endpoint and return the verdict.
+     *
+     * @deprecated targets a self-hosted {@code /api/v1/verify} service absent on
+     *     the stock RootHerald deployment. Use {@link BackgroundCheckClient} for
+     *     server -&gt; server appraisal, or {@link #verifyOffline(String)} for
+     *     badge-tier checks.
+     */
+    @Deprecated
     public VerifyResult verifyOnline(String token, String action) {
         Objects.requireNonNull(token, "token");
         URI endpoint = baseUri.resolve("/api/v1/verify");
