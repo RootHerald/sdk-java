@@ -140,30 +140,31 @@ public final class AttestationTokenVerifier implements TokenVerifier {
     }
 
     private static AttestationClaims toAttestationClaims(JWTClaimsSet c) {
-        Map<String, Object> all = c.getClaims();
-        Map<String, Object> raw = new HashMap<>(all);
+        // Defensive copy shared (read-only) as the forwards-compat map on both records.
+        Map<String, Object> raw = new HashMap<>(c.getClaims());
         DeviceClaims device = new DeviceClaims(
-                asString(all.get("ueid")),
-                asString(all.get("hwmodel")),
-                asString(all.get("dbgstat")),
-                asInteger(all.get("ear.status")),
+                asString(raw.get("ueid")),
+                asString(raw.get("hwmodel")),
+                asString(raw.get("dbgstat")),
+                asInteger(raw.get("ear.status")),
                 raw
         );
-        Instant exp = c.getExpirationTime() != null ? c.getExpirationTime().toInstant() : null;
-        Instant iat = c.getIssueTime() != null ? c.getIssueTime().toInstant() : null;
-        Instant nbf = c.getNotBeforeTime() != null ? c.getNotBeforeTime().toInstant() : null;
         return new AttestationClaims(
                 c.getSubject(),
                 c.getIssuer(),
                 c.getAudience(),
-                exp,
-                iat,
-                nbf,
-                asString(all.get("eat_nonce")),
-                asString(all.get("eat_profile")),
+                toInstant(c.getExpirationTime()),
+                toInstant(c.getIssueTime()),
+                toInstant(c.getNotBeforeTime()),
+                asString(raw.get("eat_nonce")),
+                asString(raw.get("eat_profile")),
                 device,
                 raw
         );
+    }
+
+    private static Instant toInstant(Date date) {
+        return date == null ? null : date.toInstant();
     }
 
     private static String asString(Object v) {
