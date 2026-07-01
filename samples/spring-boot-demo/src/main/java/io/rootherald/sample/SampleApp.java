@@ -78,9 +78,9 @@ public class SampleApp {
             }
             // 1) mint a nonce; in production hand challenge.nonce() to the client
             //    first, then receive the evidence it produced. Compressed here.
-            Challenge challenge = rh.createChallenge();
+            Challenge challenge = rh.issueChallenge();
             // 2) appraise the opaque evidence the client posted.
-            AttestResult result = rh.attest(evidence, AttestOptions.of(challenge.challengeId()));
+            AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
             if (!result.isAllowed()) {
                 // An un-enrolled / failing device is a verdict, not an error.
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)

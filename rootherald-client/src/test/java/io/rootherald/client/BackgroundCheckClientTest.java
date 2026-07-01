@@ -8,6 +8,7 @@ import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
 import io.rootherald.QuotaExceededException;
+import io.rootherald.RootHeraldApiException;
 import io.rootherald.UnknownPolicyException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -170,5 +172,129 @@ class BackgroundCheckClientTest {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 429, "{}");
         assertThrows(QuotaExceededException.class,
                 () -> client.attest("{}", AttestOptions.of("ch_1")));
+    }
+
+    // ── ABI backend-relay contract ────────────────────────────────────────
+
+    @Test
+    void issueChallengeIsTheCanonicalName() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/challenge", 200,
+                "{\"challengeId\":\"ch_1\",\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}");
+        Challenge challenge = client.issueChallenge();
+        assertEquals("ch_1", challenge.challengeId());
+        assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
+    }
+
+    @Test
+    void verifyIsTheCanonicalName() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertTrue(result.isAllowed());
+    }
+
+    @Test
+    void relayEnrollFreshReturnsChallenge() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/enroll", 201,
+                "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
+        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .platform("windows")
+                .build());
+        assertFalse(result.alreadyEnrolled());
+        assertEquals("dev-1", result.deviceId());
+        assertTrue(result.challenge().isPresent());
+        assertEquals("cb==", result.challenge().get().credentialBlob());
+        assertEquals("es==", result.challenge().get().encryptedSecret());
+        assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
+    }
+
+    @Test
+    void relayEnrollSendsCanonicalWireShape() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/enroll", 201,
+                "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
+        client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .platform("linux")
+                .ekCertPem("-----BEGIN CERT-----")
+                .ekCertificateChain(List.of("int-a", "int-b"))
+                .build());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals("ekpub==", sent.get("ekPublicKey").asText());
+        assertEquals("akpub==", sent.get("akPublicArea").asText());
+        assertEquals("linux", sent.get("platform").asText());
+        assertEquals("-----BEGIN CERT-----", sent.get("ekCertPem").asText());
+        assertEquals(2, sent.get("ekCertificateChain").size());
+        assertEquals("int-b", sent.get("ekCertificateChain").get(1).asText());
+    }
+
+    @Test
+    void relayEnrollAlreadyEnrolledSkipsActivate() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/enroll", 409,
+                "{\"deviceId\":\"dev-7\"}");
+        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .platform("windows")
+                .build());
+        assertTrue(result.alreadyEnrolled());
+        assertEquals("dev-7", result.deviceId());
+        assertTrue(result.challenge().isEmpty());
+    }
+
+    @Test
+    void relayEnroll409MissingDeviceIdThrows() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/enroll", 409, "{}");
+        assertThrows(RootHeraldApiException.class,
+                () -> client.relayEnroll(EnrollRequestBlob.builder()
+                        .ekPublicKey("ekpub==")
+                        .akPublicArea("akpub==")
+                        .platform("windows")
+                        .build()));
+    }
+
+    @Test
+    void relayEnrollMapsAuthError() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/enroll", 401,
+                "{\"message\":\"bad key\"}");
+        assertThrows(InvalidSecretKeyException.class,
+                () -> client.relayEnroll(EnrollRequestBlob.builder()
+                        .ekPublicKey("ekpub==")
+                        .akPublicArea("akpub==")
+                        .platform("windows")
+                        .build()));
+    }
+
+    @Test
+    void relayActivateReturnsTerminalBody() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/devices/activate", 200,
+                "{\"deviceId\":\"dev-1\",\"status\":\"enrolled\",\"enrolledAt\":\"2030-01-01T00:00:00Z\"}");
+        RelayActivateResponse result = client.relayActivate(
+                new EnrollActivationResponse("dev-1", "secret=="));
+        assertEquals("dev-1", result.deviceId());
+        assertEquals("enrolled", result.status());
+        assertEquals("2030-01-01T00:00:00Z", result.enrolledAt());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals("dev-1", sent.get("deviceId").asText());
+        assertEquals("secret==", sent.get("decryptedSecret").asText());
+        assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
+    }
+
+    @Test
+    void relayActivateRequiresDeviceIdAndSecret() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnrollActivationResponse("", "secret=="));
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnrollActivationResponse("dev-1", ""));
+    }
+
+    @Test
+    void enrollBlobRequiresEkAndAk() {
+        assertThrows(IllegalArgumentException.class,
+                () -> EnrollRequestBlob.builder().akPublicArea("akpub==").build());
+        assertThrows(IllegalArgumentException.class,
+                () -> EnrollRequestBlob.builder().ekPublicKey("ekpub==").build());
     }
 }

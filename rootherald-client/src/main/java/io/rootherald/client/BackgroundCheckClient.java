@@ -2,6 +2,7 @@ package io.rootherald.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
@@ -22,19 +23,30 @@ import java.util.Objects;
 /**
  * Server -&gt; server Background-Check client.
  * <p>
- * The customer's dumb client collects an opaque evidence blob (no keys, no
- * RootHerald contact) and hands it to the customer's own server. The server uses
- * this client, authenticated with its {@code rh_sk_} secret key, to:
+ * The customer's keyless client does local TPM work and hands opaque blobs to
+ * the customer's own server. The server uses this client, authenticated with its
+ * {@code rh_sk_} secret key, to relay those blobs to RootHerald. It mirrors the
+ * four helpers of the canonical {@code @rootherald/node} backend-relay contract:
  * <ol>
- *   <li>mint a relay-friendly nonce — {@link #createChallenge()}</li>
- *   <li>submit the evidence for appraisal and get a verdict —
- *       {@link #attest(String, AttestOptions)}</li>
+ *   <li>{@link #relayEnroll(EnrollRequestBlob)} — relay the one-time device-key
+ *       bootstrap ({@code POST /api/v1/devices/enroll}); resolves the asymmetric
+ *       {@code 201} (fresh) / {@code 409} (already enrolled) outcomes</li>
+ *   <li>{@link #relayActivate(EnrollActivationResponse)} — complete the
+ *       EK&rarr;AK credential-activation handshake
+ *       ({@code POST /api/v1/devices/activate})</li>
+ *   <li>{@link #issueChallenge()} — mint a relay-friendly nonce
+ *       ({@code POST /api/v1/attestations/challenge})</li>
+ *   <li>{@link #verify(String, AttestOptions)} — submit the evidence blob for
+ *       appraisal and get a verdict ({@code POST /api/v1/attestations/verify})</li>
  * </ol>
+ * <p>
+ * The verdict is computed by RootHerald and returned here, to the customer's
+ * backend — it NEVER travels through the client, which holds no key.
  * <p>
  * This is ADDITIVE. The offline/badge-tier path
  * ({@link RootHeraldClient#verifyOffline(String)} and the Spring guard) is
- * unchanged; the optional token returned by attest with
- * {@link AttestOptions#returnToken(boolean)} is itself verifiable with it.
+ * unchanged; the optional token returned by {@link #verify(String, AttestOptions)}
+ * with {@link AttestOptions#returnToken(boolean)} is itself verifiable with it.
  * <p>
  * Uses the JDK {@link HttpClient}; no third-party HTTP dependency.
  */
@@ -65,17 +77,17 @@ public final class BackgroundCheckClient {
      * POST {baseUrl}/api/v1/attestations/challenge — mint a relay-friendly
      * nonce. Relay {@link Challenge#nonce()} to the client; it quotes over it,
      * then submit the resulting evidence with
-     * {@link #attest(String, AttestOptions)} using
+     * {@link #verify(String, AttestOptions)} using
      * {@link Challenge#challengeId()}.
      */
-    public Challenge createChallenge() {
-        return createChallenge(null);
+    public Challenge issueChallenge() {
+        return issueChallenge(null);
     }
 
     /**
-     * As {@link #createChallenge()}, with an optional advisory device hint.
+     * As {@link #issueChallenge()}, with an optional advisory device hint.
      */
-    public Challenge createChallenge(String deviceHint) {
+    public Challenge issueChallenge(String deviceHint) {
         ObjectNode body = mapper.createObjectNode();
         if (deviceHint != null) {
             body.put("deviceHint", deviceHint);
@@ -102,7 +114,7 @@ public final class BackgroundCheckClient {
      * @param evidence opaque blob (JSON string) from the client collector; passed through verbatim
      * @param opts     attest options carrying the challenge id and optional policy/returnToken
      */
-    public AttestResult attest(String evidence, AttestOptions opts) {
+    public AttestResult verify(String evidence, AttestOptions opts) {
         Objects.requireNonNull(evidence, "evidence");
         Objects.requireNonNull(opts, "opts");
 
@@ -131,7 +143,146 @@ public final class BackgroundCheckClient {
         return new AttestResult(AttestResult.normalize(raw), verdictNode, token);
     }
 
+    /**
+     * Enroll relay — leg 1. POST {baseUrl}/api/v1/devices/enroll.
+     * <p>
+     * Relays the keyless client's {@code EnrollBegin()} blob to RootHerald with
+     * the {@code rh_sk_} secret and resolves the asymmetric response:
+     * <ul>
+     *   <li><b>{@code 201}</b> — a fresh enroll; returns a
+     *       {@link RelayEnrollResult} with {@code alreadyEnrolled() == false} and
+     *       the {@link EnrollActivationChallenge}. Hand the challenge to the
+     *       client's {@code EnrollComplete}, then relay the result to
+     *       {@link #relayActivate(EnrollActivationResponse)}.</li>
+     *   <li><b>{@code 409}</b> — the device is already enrolled; returns
+     *       {@code alreadyEnrolled() == true} (no challenge). SKIP the activate
+     *       leg — just use {@link RelayEnrollResult#deviceId()}.</li>
+     * </ul>
+     * Other non-2xx statuses raise the matching {@link RootHeraldApiException}.
+     *
+     * @param blob the client's enroll request blob; relayed verbatim
+     */
+    public RelayEnrollResult relayEnroll(EnrollRequestBlob blob) {
+        Objects.requireNonNull(blob, "blob");
+
+        ObjectNode body = mapper.createObjectNode();
+        body.put("ekPublicKey", blob.ekPublicKey());
+        body.put("akPublicArea", blob.akPublicArea());
+        if (blob.platform() != null) {
+            body.put("platform", blob.platform());
+        }
+        if (blob.ekCertPem() != null) {
+            body.put("ekCertPem", blob.ekCertPem());
+        }
+        if (blob.ekCertificateChain() != null) {
+            ArrayNode chain = body.putArray("ekCertificateChain");
+            blob.ekCertificateChain().forEach(chain::add);
+        }
+
+        HttpResponse<String> resp = rawPost("/api/v1/devices/enroll", body);
+        int status = resp.statusCode();
+
+        // 409 = already enrolled: the body carries only `deviceId`. Resolve it and
+        // signal "skip activate" instead of treating it as an error.
+        if (status == 409) {
+            JsonNode b = tryReadTree(resp.body());
+            String deviceId = b != null && b.hasNonNull("deviceId") ? b.get("deviceId").asText() : null;
+            if (deviceId == null || deviceId.isEmpty()) {
+                throw new RootHeraldApiException(409, "already-enrolled (409) response missing deviceId");
+            }
+            return RelayEnrollResult.alreadyEnrolled(deviceId);
+        }
+
+        if (status / 100 != 2) {
+            throw mapError(status, resp.body());
+        }
+
+        JsonNode data = parseBody(resp);
+        JsonNode deviceId = data.get("deviceId");
+        JsonNode credentialBlob = data.get("credentialBlob");
+        JsonNode encryptedSecret = data.get("encryptedSecret");
+        if (deviceId == null || credentialBlob == null || encryptedSecret == null) {
+            throw new RootHeraldApiException(status,
+                    "enroll response missing deviceId/credentialBlob/encryptedSecret");
+        }
+        EnrollActivationChallenge challenge = new EnrollActivationChallenge(
+                deviceId.asText(), credentialBlob.asText(), encryptedSecret.asText());
+        return RelayEnrollResult.fresh(deviceId.asText(), challenge);
+    }
+
+    /**
+     * Enroll relay — leg 2. POST {baseUrl}/api/v1/devices/activate.
+     * <p>
+     * Relays the client's {@code EnrollComplete()} blob (the decrypted credential
+     * secret) to RootHerald, completing the EK&rarr;AK credential-activation
+     * handshake. Call this only when {@link #relayEnroll(EnrollRequestBlob)}
+     * returned {@code alreadyEnrolled() == false}.
+     *
+     * @param activation the client's activation response; relayed verbatim
+     * @return the terminal {@code {deviceId, status?, enrolledAt?}} body
+     */
+    public RelayActivateResponse relayActivate(EnrollActivationResponse activation) {
+        Objects.requireNonNull(activation, "activation");
+
+        ObjectNode body = mapper.createObjectNode();
+        body.put("deviceId", activation.deviceId());
+        body.put("decryptedSecret", activation.decryptedSecret());
+        if (activation.akPublicKey() != null) {
+            body.put("akPublicKey", activation.akPublicKey());
+        }
+
+        JsonNode data = post("/api/v1/devices/activate", body);
+        JsonNode deviceId = data.get("deviceId");
+        if (deviceId == null || !deviceId.isTextual()) {
+            throw new RootHeraldApiException(200, "activate response missing deviceId");
+        }
+        String status = data.hasNonNull("status") ? data.get("status").asText() : null;
+        String enrolledAt = data.hasNonNull("enrolledAt") ? data.get("enrolledAt").asText() : null;
+        return new RelayActivateResponse(deviceId.asText(), status, enrolledAt);
+    }
+
+    /**
+     * @deprecated renamed to {@link #issueChallenge()} for the ABI backend-relay
+     *     contract. Retained as a thin alias for backwards compatibility.
+     */
+    @Deprecated
+    public Challenge createChallenge() {
+        return issueChallenge(null);
+    }
+
+    /**
+     * @deprecated renamed to {@link #issueChallenge(String)} for the ABI
+     *     backend-relay contract. Retained as a thin alias.
+     */
+    @Deprecated
+    public Challenge createChallenge(String deviceHint) {
+        return issueChallenge(deviceHint);
+    }
+
+    /**
+     * @deprecated renamed to {@link #verify(String, AttestOptions)} for the ABI
+     *     backend-relay contract. Retained as a thin alias.
+     */
+    @Deprecated
+    public AttestResult attest(String evidence, AttestOptions opts) {
+        return verify(evidence, opts);
+    }
+
+    /** Issue an authenticated JSON POST and map non-2xx responses to typed exceptions. */
     private JsonNode post(String path, JsonNode body) {
+        HttpResponse<String> resp = rawPost(path, body);
+        if (resp.statusCode() / 100 != 2) {
+            throw mapError(resp.statusCode(), resp.body());
+        }
+        return parseBody(resp);
+    }
+
+    /**
+     * Issue an authenticated JSON POST, returning the raw response. Status
+     * interpretation is left to the caller — used by the enroll relay leg, which
+     * must treat {@code 409} as "already enrolled" rather than an error.
+     */
+    private HttpResponse<String> rawPost(String path, JsonNode body) {
         URI endpoint = baseUri.resolve(path);
         String payload;
         try {
@@ -148,24 +299,32 @@ public final class BackgroundCheckClient {
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
 
-        HttpResponse<String> resp;
         try {
-            resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            return http.send(req, HttpResponse.BodyHandlers.ofString());
         } catch (IOException ex) {
             throw new RootHeraldException("RootHerald API unreachable: " + ex.getMessage(), ex);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new RootHeraldException("RootHerald API call interrupted", ex);
         }
+    }
 
-        if (resp.statusCode() / 100 != 2) {
-            throw mapError(resp.statusCode(), resp.body());
-        }
+    /** Parse a 2xx response body, mapping a parse failure to a typed API error. */
+    private JsonNode parseBody(HttpResponse<String> resp) {
         try {
             return mapper.readTree(resp.body());
         } catch (IOException ex) {
             throw new RootHeraldApiException(resp.statusCode(),
                     "Malformed RootHerald response: " + ex.getMessage());
+        }
+    }
+
+    /** Parse a body unknown-safely, returning {@code null} on any failure. */
+    private JsonNode tryReadTree(String body) {
+        try {
+            return mapper.readTree(body);
+        } catch (IOException ex) {
+            return null;
         }
     }
 

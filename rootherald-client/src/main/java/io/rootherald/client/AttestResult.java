@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The result of {@link BackgroundCheckClient#attest(String, AttestOptions)}:
+ * The result of {@link BackgroundCheckClient#verify(String, AttestOptions)}:
  * the device verdict, the full verdict node, and an optional signed EAT (JWT)
  * when {@link AttestOptions#returnToken(boolean)} was requested.
  *
