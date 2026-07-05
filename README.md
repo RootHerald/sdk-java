@@ -2,8 +2,8 @@
 
 [Root Herald](https://rootherald.io) device attestation from a Java backend. Plain Java + Spring Boot. Requires Java 17+. Two paths:
 
-- **Background-Check (server → server)** — `BackgroundCheckClient`: your dumb client collects an opaque evidence blob and hands it to *your* server, which appraises it with Root Herald using your `rh_sk_` secret key. The client never holds a key or talks to Root Herald.
-- **Badge tier (offline verify)** — `RootHeraldClient.verifyOffline` + the Spring guard: verify a Root Herald-issued EAT (JWT) against the cached JWKS.
+- **Background-Check (server → server)** via `BackgroundCheckClient`: your dumb client collects an opaque evidence blob and hands it to *your* server, which appraises it with Root Herald using your `rh_sk_` secret key. The client never holds a key or talks to Root Herald.
+- **Badge tier (offline verify)** via `RootHeraldClient.verifyOffline` + the Spring guard: verify a Root Herald-issued EAT (JWT) against the cached JWKS.
 
 ## Install
 
@@ -43,7 +43,7 @@ if (!result.isAllowed()) {
 
 `issueChallenge` / `verify` are the canonical ABI backend-relay names; the older `createChallenge` / `attest` remain as deprecated aliases.
 
-An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw — `InvalidSecretKeyException` (401), `UnknownPolicyException` (422), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` (422), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
 
 ### Enroll relay (one-time device-key bootstrap)
 
@@ -70,7 +70,7 @@ if (enroll.alreadyEnrolled()) {
 }
 ```
 
-The client never holds the `rh_sk_` key and never talks to RootHerald — this backend helper is the only thing that does. The verdict is computed by RootHerald and returned to your backend; it never travels through the client.
+The client never holds the `rh_sk_` key and never talks to RootHerald; this backend helper is the only thing that does. The verdict is computed by RootHerald and returned to your backend; it never travels through the client.
 
 ## Verify a token (badge tier)
 
@@ -89,7 +89,7 @@ if (!result.isAllowed()) {
 String deviceId = result.claims().subject();
 ```
 
-`verifyOffline` checks the JWT locally against the cached JWKS. (The legacy `verifyOnline(token, action)` is deprecated — it targets a self-hosted service absent on the stock Root Herald deployment; use `BackgroundCheckClient` instead.)
+`verifyOffline` checks the JWT locally against the cached JWKS. (The legacy `verifyOnline(token, action)` is deprecated: it targets a self-hosted service absent on the stock Root Herald deployment; use `BackgroundCheckClient` instead.)
 
 ## Spring Boot
 
