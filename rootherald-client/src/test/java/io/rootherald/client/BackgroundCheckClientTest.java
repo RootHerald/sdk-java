@@ -64,9 +64,9 @@ class BackgroundCheckClientTest {
     }
 
     @Test
-    void rejectsPublishableKey() {
+    void rejectsInvalidPrefixKey() {
         assertThrows(IllegalArgumentException.class,
-                () -> BackgroundCheckClient.builder().secretKey("rh_pk_live_abc"));
+                () -> BackgroundCheckClient.builder().secretKey("rh_bogus_abc"));
     }
 
     @Test
@@ -86,13 +86,12 @@ class BackgroundCheckClientTest {
     }
 
     @Test
-    void attestPassVerdictSurfacesToken() throws Exception {
+    void attestPassVerdict() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"},\"token\":\"eyJ.signed.eat\"}");
+                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
         AttestResult result = client.attest("{\"quote\":\"...\"}",
-                AttestOptions.of("ch_1").returnToken(true));
+                AttestOptions.of("ch_1"));
         assertTrue(result.isAllowed());
-        assertEquals("eyJ.signed.eat", result.token());
         JsonNode sent = mapper.readTree(lastBody.get());
         assertEquals("ch_1", sent.get("challengeId").asText());
         assertEquals("...", sent.get("evidence").get("quote").asText());
@@ -134,7 +133,6 @@ class BackgroundCheckClientTest {
                 "{\"verdict\":{\"verdict\":\"fail\"}}");
         AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
         assertEquals("deny", result.verdict());
-        assertNull(result.token());
     }
 
     @Test

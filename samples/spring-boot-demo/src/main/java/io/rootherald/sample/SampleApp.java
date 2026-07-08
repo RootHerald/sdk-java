@@ -1,14 +1,9 @@
 package io.rootherald.sample;
 
-import io.rootherald.AttestationClaims;
 import io.rootherald.client.AttestOptions;
 import io.rootherald.client.AttestResult;
 import io.rootherald.client.BackgroundCheckClient;
 import io.rootherald.client.Challenge;
-import io.rootherald.spring.RootHeraldGuard;
-import io.rootherald.spring.RootHeraldGuardFilter;
-
-import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -21,15 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * Runnable Spring Boot sample showing both Root Herald paths.
- *
- * <p>Badge tier (offline verify): {@code POST /signup} with the
- * {@code X-RootHerald-Token} header set; {@code @RootHeraldGuard} verifies the
- * EAT against the JWKS before the handler runs. Configure with:
- * <pre>
- * rootherald.issuer=https://rootherald.io/myorg
- * rootherald.audience=demo-rp
- * </pre>
+ * Runnable Spring Boot sample showing the Root Herald Background-Check path.
  *
  * <p>Background-Check (server -&gt; server): {@code POST /attest} with the
  * dumb client's opaque evidence JSON as the body; this server appraises it with
@@ -39,20 +26,6 @@ import java.util.Map;
 public class SampleApp {
     public static void main(String[] args) {
         SpringApplication.run(SampleApp.class, args);
-    }
-
-    /** Badge tier — guarded by offline JWKS verification. */
-    @RestController
-    public static class SignupController {
-        @PostMapping("/signup")
-        @RootHeraldGuard(action = "signup")
-        public ResponseEntity<Map<String, Object>> signup(HttpServletRequest req) {
-            AttestationClaims claims = (AttestationClaims) req.getAttribute(RootHeraldGuardFilter.CLAIMS_ATTRIBUTE);
-            return ResponseEntity.ok(Map.of(
-                    "status", "ok",
-                    "device", claims != null ? claims.subject() : "anonymous"
-            ));
-        }
     }
 
     /**

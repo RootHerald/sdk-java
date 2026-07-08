@@ -43,11 +43,6 @@ import java.util.Objects;
  * The verdict is computed by RootHerald and returned here, to the customer's
  * backend — it NEVER travels through the client, which holds no key.
  * <p>
- * This is ADDITIVE. The offline/badge-tier path
- * ({@link RootHeraldClient#verifyOffline(String)} and the Spring guard) is
- * unchanged; the optional token returned by {@link #verify(String, AttestOptions)}
- * with {@link AttestOptions#returnToken(boolean)} is itself verifiable with it.
- * <p>
  * Uses the JDK {@link HttpClient}; no third-party HTTP dependency.
  */
 public final class BackgroundCheckClient {
@@ -104,15 +99,14 @@ public final class BackgroundCheckClient {
 
     /**
      * POST {baseUrl}/api/v1/attestations/verify — submit the opaque evidence
-     * blob for server-side appraisal and return the verdict (plus an optional
-     * signed EAT when {@link AttestOptions#returnToken(boolean)} is set).
+     * blob for server-side appraisal and return the verdict.
      * <p>
      * An un-enrolled / failing device is NOT an error — it returns a normal
      * {@link AttestResult} carrying a {@code "deny"}/{@code "review"} verdict.
      * Only protocol/auth/quota problems raise a {@link RootHeraldApiException}.
      *
      * @param evidence opaque blob (JSON string) from the client collector; passed through verbatim
-     * @param opts     attest options carrying the challenge id and optional policy/returnToken
+     * @param opts     attest options carrying the challenge id and optional policy
      */
     public AttestResult verify(String evidence, AttestOptions opts) {
         Objects.requireNonNull(evidence, "evidence");
@@ -129,9 +123,6 @@ public final class BackgroundCheckClient {
         if (opts.policy() != null) {
             body.put("policy", opts.policy());
         }
-        if (opts.returnTokenRequested()) {
-            body.put("returnToken", true);
-        }
 
         JsonNode data = post("/api/v1/attestations/verify", body);
         JsonNode verdictNode = data.get("verdict");
@@ -139,8 +130,7 @@ public final class BackgroundCheckClient {
             throw new RootHeraldApiException(200, "verify response missing verdict");
         }
         String raw = verdictNode.path("verdict").asText(null);
-        String token = data.hasNonNull("token") ? data.get("token").asText() : null;
-        return new AttestResult(AttestResult.normalize(raw), verdictNode, token);
+        return new AttestResult(AttestResult.normalize(raw), verdictNode);
     }
 
     /**
@@ -364,8 +354,8 @@ public final class BackgroundCheckClient {
         private HttpClient httpClient;
 
         /**
-         * Your RootHerald secret key (rh_sk_…). Required. A publishable key
-         * (rh_pk_…) is rejected — it must never be used server-side.
+         * Your RootHerald secret key (rh_sk_…). Required. Used server-side as a
+         * Bearer token; any value not starting with rh_sk_ is rejected.
          */
         public Builder secretKey(String secretKey) {
             if (secretKey == null || secretKey.isEmpty()) {
@@ -373,7 +363,7 @@ public final class BackgroundCheckClient {
             }
             if (!secretKey.startsWith(SECRET_KEY_PREFIX)) {
                 throw new IllegalArgumentException(
-                        "secretKey must be a secret key (rh_sk_…); a publishable key (rh_pk_…) must never be used server-side");
+                        "RootHerald secret key must start with rh_sk_");
             }
             this.secretKey = secretKey;
             return this;

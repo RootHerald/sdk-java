@@ -12,13 +12,9 @@
 
     <artifactId>rootherald-core</artifactId>
     <name>RootHerald Core</name>
-    <description>JWT/JWKS verification and CAEP SET webhook verification primitives.</description>
+    <description>Shared error taxonomy for the RootHerald Background-Check SDK.</description>
 
     <dependencies>
-        <dependency>
-            <groupId>com.nimbusds</groupId>
-            <artifactId>nimbus-jose-jwt</artifactId>
-        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

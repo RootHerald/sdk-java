@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>RootHerald Spring Boot Demo</name>
-    <description>Runnable sample showing @RootHeraldGuard on a Spring controller.</description>
+    <description>Runnable sample showing the RootHerald Background-Check client on a Spring controller.</description>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
@@ -27,11 +27,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.rootherald</groupId>
-            <artifactId>rootherald-spring</artifactId>
-            <version>0.1.0</version>
         </dependency>
         <!-- BackgroundCheckClient for the server -> server attest endpoint. -->
         <dependency>

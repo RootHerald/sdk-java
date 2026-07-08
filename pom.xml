@@ -10,7 +10,7 @@
     <packaging>pom</packaging>
 
     <name>RootHerald Java SDK</name>
-    <description>Server-side SDK for verifying RootHerald attestation tokens and CAEP webhooks.</description>
+    <description>Server-side SDK for the RootHerald server-to-server Background-Check flow.</description>
     <url>https://rootherald.io</url>
 
     <licenses>
@@ -23,26 +23,18 @@
     <modules>
         <module>rootherald-core</module>
         <module>rootherald-client</module>
-        <module>rootherald-spring</module>
     </modules>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <nimbus.version>9.37.3</nimbus.version>
         <jackson.version>2.16.1</jackson.version>
         <junit.version>5.10.2</junit.version>
-        <spring.boot.version>3.2.4</spring.boot.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>com.nimbusds</groupId>
-                <artifactId>nimbus-jose-jwt</artifactId>
-                <version>${nimbus.version}</version>
-            </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>

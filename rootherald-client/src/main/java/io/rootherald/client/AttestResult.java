@@ -7,14 +7,12 @@ import java.util.Map;
 
 /**
  * The result of {@link BackgroundCheckClient#verify(String, AttestOptions)}:
- * the device verdict, the full verdict node, and an optional signed EAT (JWT)
- * when {@link AttestOptions#returnToken(boolean)} was requested.
+ * the device verdict and the full verdict node.
  *
  * @param verdict     normalised verdict: {@code "allow"}, {@code "deny"}, or {@code "review"}
  * @param verdictNode the full verdict object returned by the server
- * @param token       the signed EAT, or {@code null} if not requested/returned
  */
-public record AttestResult(String verdict, JsonNode verdictNode, String token) {
+public record AttestResult(String verdict, JsonNode verdictNode) {
 
     /** True when the verdict is {@code "allow"}. */
     public boolean isAllowed() {
