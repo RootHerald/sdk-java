@@ -85,12 +85,26 @@ class BackgroundCheckClientTest {
         assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
     }
 
+    // The REAL server wire shape (camelCase, from platform BackgroundCheckDtos):
+    // the pass/fail token lives at verdict.device.verdict, and assuranceClaimsMet
+    // + enrollmentRequired are top-level siblings of `verdict`.
+    private static final String PASSING_VERDICT =
+            "{\"verdict\":{\"acr\":\"urn:acr:hw\",\"amr\":[\"hwk\"],"
+                    + "\"authTime\":\"2030-01-01T00:00:00Z\",\"expiresAt\":\"2030-01-01T00:05:00Z\","
+                    + "\"device\":{\"ueid\":\"dev-9\",\"disclosureClass\":\"pseudonymous\","
+                    + "\"earStatus\":\"affirming\",\"verdict\":\"pass\",\"attestationType\":\"tpm20\","
+                    + "\"attestedAt\":\"2030-01-01T00:00:00Z\",\"quoteVerified\":true,"
+                    + "\"secureBootVerified\":true,\"eventLogVerified\":true,\"platform\":\"windows\"}},"
+                    + "\"assuranceClaimsMet\":[\"urn:rootherald:assurance:hardware-backed\"],"
+                    + "\"enrollmentRequired\":false}";
+
     @Test
     void attestPassVerdict() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
         AttestResult result = client.attest("{\"quote\":\"...\"}",
                 AttestOptions.of("ch_1"));
+        // A genuinely PASSING device (token at verdict.device.verdict) maps to allow.
+        assertEquals("allow", result.verdict());
         assertTrue(result.isAllowed());
         JsonNode sent = mapper.readTree(lastBody.get());
         assertEquals("ch_1", sent.get("challengeId").asText());
@@ -98,9 +112,55 @@ class BackgroundCheckClientTest {
     }
 
     @Test
+    void exposesTopLevelParityFields() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertEquals(List.of("urn:rootherald:assurance:hardware-backed"),
+                result.assuranceClaimsMet());
+        assertFalse(result.enrollmentRequired());
+    }
+
+    @Test
+    void surfacesEnrollmentRequiredSignal() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}},"
+                        + "\"assuranceClaimsMet\":[],\"enrollmentRequired\":true}");
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertTrue(result.enrollmentRequired());
+        assertTrue(result.assuranceClaimsMet().isEmpty());
+        assertEquals("deny", result.verdict());
+    }
+
+    @Test
+    void parityFieldsDefaultWhenAbsent() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}}}");
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertTrue(result.assuranceClaimsMet().isEmpty());
+        assertFalse(result.enrollmentRequired());
+    }
+
+    @Test
+    void sendsRequestedDisclosureClassWhenSet() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        client.verify("{}", AttestOptions.of("ch_1").requestedDisclosureClass("pseudonymous"));
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals("pseudonymous", sent.get("requestedDisclosureClass").asText());
+    }
+
+    @Test
+    void omitsRequestedDisclosureClassWhenUnset() throws Exception {
+        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        client.verify("{}", AttestOptions.of("ch_1"));
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertFalse(sent.has("requestedDisclosureClass"));
+    }
+
+    @Test
     void exposesCohortFields() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\",\"device\":{"
+                "{\"verdict\":{\"device\":{"
+                        + "\"verdict\":\"pass\",\"ueid\":\"dev-9\","
                         + "\"cohortKey\":\"tpm20:win11:sb1:abc123\","
                         + "\"cohortScope\":\"tenant-fleet\","
                         + "\"cohortPrevalence\":0.042,"
@@ -119,7 +179,7 @@ class BackgroundCheckClientTest {
     @Test
     void cohortFieldsNullWhenAbsent() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
         AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
         assertNull(result.cohortKey());
         assertNull(result.cohortPrevalence());
@@ -130,7 +190,7 @@ class BackgroundCheckClientTest {
     @Test
     void failVerdictIsNotAnError() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"fail\"}}");
+                "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}}}");
         AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
         assertEquals("deny", result.verdict());
     }
@@ -186,7 +246,7 @@ class BackgroundCheckClientTest {
     @Test
     void verifyIsTheCanonicalName() throws Exception {
         BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
-                "{\"verdict\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}");
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
         AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertTrue(result.isAllowed());
     }

@@ -3,16 +3,32 @@ package io.rootherald.client;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * The result of {@link BackgroundCheckClient#verify(String, AttestOptions)}:
  * the device verdict and the full verdict node.
+ * <p>
+ * {@code assuranceClaimsMet} and {@code enrollmentRequired} are top-level
+ * siblings of {@code verdict} on the wire (NOT nested inside it), mirroring
+ * {@code @rootherald/node}. Customers gate capabilities on
+ * {@code assuranceClaimsMet} and drive the enroll-on-miss flow on
+ * {@code enrollmentRequired}.
  *
- * @param verdict     normalised verdict: {@code "allow"}, {@code "deny"}, or {@code "review"}
- * @param verdictNode the full verdict object returned by the server
+ * @param verdict            normalised verdict: {@code "allow"}, {@code "deny"}, or {@code "review"}
+ * @param verdictNode        the full verdict object returned by the server
+ * @param assuranceClaimsMet assurance-claim URNs the device satisfied; empty if absent, never {@code null}
+ * @param enrollmentRequired {@code true} when the device is not enrolled and the caller
+ *                           should drive the enroll / re-attestation flow before trusting the verdict
  */
-public record AttestResult(String verdict, JsonNode verdictNode) {
+public record AttestResult(String verdict, JsonNode verdictNode,
+                           List<String> assuranceClaimsMet, boolean enrollmentRequired) {
+
+    public AttestResult {
+        assuranceClaimsMet = assuranceClaimsMet == null
+                ? List.of() : List.copyOf(assuranceClaimsMet);
+    }
 
     /** True when the verdict is {@code "allow"}. */
     public boolean isAllowed() {

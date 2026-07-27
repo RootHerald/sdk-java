@@ -18,6 +18,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -48,7 +50,7 @@ import java.util.Objects;
 public final class BackgroundCheckClient {
 
     /** Production RootHerald API base URL. */
-    public static final String DEFAULT_BASE_URL = "https://api.rootherald.io";
+    public static final String DEFAULT_BASE_URL = "https://rootherald.io";
 
     private static final String SECRET_KEY_PREFIX = "rh_sk_";
 
@@ -123,14 +125,33 @@ public final class BackgroundCheckClient {
         if (opts.policy() != null) {
             body.put("policy", opts.policy());
         }
+        if (opts.requestedDisclosureClass() != null) {
+            body.put("requestedDisclosureClass", opts.requestedDisclosureClass());
+        }
 
         JsonNode data = post("/api/v1/attestations/verify", body);
         JsonNode verdictNode = data.get("verdict");
         if (verdictNode == null || !verdictNode.isObject()) {
             throw new RootHeraldApiException(200, "verify response missing verdict");
         }
-        String raw = verdictNode.path("verdict").asText(null);
-        return new AttestResult(AttestResult.normalize(raw), verdictNode);
+        // The pass/fail token lives at verdict.device.verdict (with earStatus,
+        // attestationType, quoteVerified, cohort fields, …) — NOT at the top level.
+        String raw = verdictNode.path("device").path("verdict").asText(null);
+
+        // assuranceClaimsMet + enrollmentRequired are top-level siblings of
+        // `verdict`, mirroring @rootherald/node — not part of the verdict node.
+        List<String> claims = new ArrayList<>();
+        JsonNode claimsNode = data.get("assuranceClaimsMet");
+        if (claimsNode != null && claimsNode.isArray()) {
+            claimsNode.forEach(c -> {
+                if (c.isTextual()) {
+                    claims.add(c.asText());
+                }
+            });
+        }
+        boolean enrollmentRequired = data.path("enrollmentRequired").asBoolean(false);
+
+        return new AttestResult(AttestResult.normalize(raw), verdictNode, claims, enrollmentRequired);
     }
 
     /**
