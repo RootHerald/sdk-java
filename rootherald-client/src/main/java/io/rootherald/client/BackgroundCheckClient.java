@@ -13,7 +13,9 @@ import io.rootherald.RootHeraldException;
 import io.rootherald.UnknownPolicyException;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -390,10 +392,51 @@ public final class BackgroundCheckClient {
             return this;
         }
 
-        /** Override the production base URL. */
+        /**
+         * Override the production base URL. Must be an absolute https URL.
+         *
+         * <p>The secret rides in an Authorization header on every request and is
+         * full-privilege, so an {@code http://} or scheme-less base URL hands it
+         * to anyone on the path. A typo is enough, and nothing downstream notices
+         * because the request itself still succeeds. Loopback is excepted so the
+         * local docker stack keeps working over http.
+         *
+         * @throws IllegalArgumentException when the URL is not absolute https or loopback
+         */
         public Builder baseUrl(String baseUrl) {
-            this.baseUri = URI.create(baseUrl);
+            this.baseUri = requireSecureBaseUri(baseUrl);
             return this;
+        }
+
+        private static URI requireSecureBaseUri(String baseUrl) {
+            URI uri;
+            try {
+                uri = URI.create(baseUrl == null ? "" : baseUrl);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "baseUrl must be an absolute https URL (got '" + baseUrl + "')", e);
+            }
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                throw new IllegalArgumentException(
+                        "baseUrl must be an absolute https URL (got '" + baseUrl + "')");
+            }
+            if ("https".equalsIgnoreCase(uri.getScheme()) || isLoopbackHost(uri.getHost())) {
+                return uri;
+            }
+            throw new IllegalArgumentException(
+                    "baseUrl must use https (got '" + baseUrl + "')");
+        }
+
+        private static boolean isLoopbackHost(String host) {
+            String stripped = host.replace("[", "").replace("]", "");
+            if ("localhost".equalsIgnoreCase(stripped)) {
+                return true;
+            }
+            try {
+                return InetAddress.getByName(stripped).isLoopbackAddress();
+            } catch (UnknownHostException e) {
+                return false;
+            }
         }
 
         /** Swap the underlying {@link HttpClient} (timeouts, proxies, tests). */
