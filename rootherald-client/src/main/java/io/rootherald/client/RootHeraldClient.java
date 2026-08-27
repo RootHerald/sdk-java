@@ -49,7 +49,7 @@ import java.util.Objects;
  * <p>
  * Uses the JDK {@link HttpClient}; no third-party HTTP dependency.
  */
-public final class BackgroundCheckClient {
+public final class RootHeraldClient {
 
     /** Production RootHerald API base URL. */
     public static final String DEFAULT_BASE_URL = "https://rootherald.io";
@@ -61,7 +61,7 @@ public final class BackgroundCheckClient {
     private final HttpClient http;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    private BackgroundCheckClient(Builder b) {
+    private RootHeraldClient(Builder b) {
         this.secretKey = b.secretKey;
         this.baseUri = b.baseUri;
         this.http = b.httpClient != null ? b.httpClient
@@ -254,33 +254,6 @@ public final class BackgroundCheckClient {
         return new RelayActivateResponse(deviceId.asText(), status, enrolledAt);
     }
 
-    /**
-     * @deprecated renamed to {@link #issueChallenge()} for the ABI backend-relay
-     *     contract. Retained as a thin alias for backwards compatibility.
-     */
-    @Deprecated
-    public Challenge createChallenge() {
-        return issueChallenge(null);
-    }
-
-    /**
-     * @deprecated renamed to {@link #issueChallenge(String)} for the ABI
-     *     backend-relay contract. Retained as a thin alias.
-     */
-    @Deprecated
-    public Challenge createChallenge(String deviceHint) {
-        return issueChallenge(deviceHint);
-    }
-
-    /**
-     * @deprecated renamed to {@link #verify(String, AttestOptions)} for the ABI
-     *     backend-relay contract. Retained as a thin alias.
-     */
-    @Deprecated
-    public AttestResult attest(String evidence, AttestOptions opts) {
-        return verify(evidence, opts);
-    }
-
     /** Issue an authenticated JSON POST and map non-2xx responses to typed exceptions. */
     private JsonNode post(String path, JsonNode body) {
         HttpResponse<String> resp = rawPost(path, body);
@@ -370,7 +343,7 @@ public final class BackgroundCheckClient {
         return null;
     }
 
-    /** Builder for {@link BackgroundCheckClient}. */
+    /** Builder for {@link RootHeraldClient}. */
     public static final class Builder {
         private String secretKey;
         private URI baseUri = URI.create(DEFAULT_BASE_URL);
@@ -445,11 +418,11 @@ public final class BackgroundCheckClient {
             return this;
         }
 
-        public BackgroundCheckClient build() {
+        public RootHeraldClient build() {
             if (secretKey == null) {
                 throw new IllegalArgumentException("secretKey is required");
             }
-            return new BackgroundCheckClient(this);
+            return new RootHeraldClient(this);
         }
     }
 }

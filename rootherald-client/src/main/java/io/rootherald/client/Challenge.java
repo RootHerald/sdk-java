@@ -2,11 +2,11 @@ package io.rootherald.client;
 
 /**
  * A relay-friendly nonce minted by
- * {@link BackgroundCheckClient#issueChallenge()}.
+ * {@link RootHeraldClient#issueChallenge()}.
  * <p>
  * Relay {@link #nonce()} to the dumb client; it quotes over it and returns an
  * opaque evidence blob, which the server submits to
- * {@link BackgroundCheckClient#verify(String, AttestOptions)} using
+ * {@link RootHeraldClient#verify(String, AttestOptions)} using
  * {@link #challengeId()}.
  *
  * @param challengeId single-use challenge id

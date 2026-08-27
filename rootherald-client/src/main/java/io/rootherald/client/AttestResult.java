@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The result of {@link BackgroundCheckClient#verify(String, AttestOptions)}:
+ * The result of {@link RootHeraldClient#verify(String, AttestOptions)}:
  * the device verdict and the full verdict node.
  * <p>
  * {@code assuranceClaimsMet} and {@code enrollmentRequired} are top-level

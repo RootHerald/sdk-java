@@ -1,7 +1,7 @@
 package io.rootherald.client;
 
 /**
- * Options for {@link BackgroundCheckClient#verify(String, AttestOptions)}.
+ * Options for {@link RootHeraldClient#verify(String, AttestOptions)}.
  * <p>
  * Construct via {@link #of(String)} for the common case (challenge id only) and
  * chain {@link #policy(String)} as needed.
@@ -21,7 +21,7 @@ public final class AttestOptions {
         this.requestedDisclosureClass = requestedDisclosureClass;
     }
 
-    /** The single-use challenge id from {@link BackgroundCheckClient#issueChallenge()}. */
+    /** The single-use challenge id from {@link RootHeraldClient#issueChallenge()}. */
     public static AttestOptions of(String challengeId) {
         return new AttestOptions(challengeId, null, null);
     }

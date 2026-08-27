@@ -5,7 +5,7 @@ package io.rootherald.client;
  * <p>
  * Produced by the keyless client (which decrypted the challenge inside the TPM)
  * and relayed by the backend via
- * {@link BackgroundCheckClient#relayActivate(EnrollActivationResponse)}. Mirrors
+ * {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}. Mirrors
  * {@code @rootherald/contracts}' {@code EnrollActivationResponse}.
  *
  * @param deviceId        the {@code deviceId} from the {@link EnrollActivationChallenge} (required)

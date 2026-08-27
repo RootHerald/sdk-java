@@ -23,7 +23,7 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class BackgroundCheckClientTest {
+class RootHeraldClientTest {
 
     private HttpServer server;
     private final AtomicReference<String> lastBody = new AtomicReference<>();
@@ -35,7 +35,7 @@ class BackgroundCheckClientTest {
         if (server != null) server.stop(0);
     }
 
-    private BackgroundCheckClient start(String path, int status, String responseJson) throws IOException {
+    private RootHeraldClient start(String path, int status, String responseJson) throws IOException {
         return startWith(path, exchange -> {
             try {
                 lastAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
@@ -52,12 +52,12 @@ class BackgroundCheckClientTest {
         }, path);
     }
 
-    private BackgroundCheckClient startWith(String path, Consumer<HttpExchange> handler, String contextPath)
+    private RootHeraldClient startWith(String path, Consumer<HttpExchange> handler, String contextPath)
             throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(contextPath, handler::accept);
         server.start();
-        return BackgroundCheckClient.builder()
+        return RootHeraldClient.builder()
                 .secretKey("rh_sk_test_xxx")
                 .baseUrl("http://127.0.0.1:" + server.getAddress().getPort())
                 .build();
@@ -66,20 +66,20 @@ class BackgroundCheckClientTest {
     @Test
     void rejectsInvalidPrefixKey() {
         assertThrows(IllegalArgumentException.class,
-                () -> BackgroundCheckClient.builder().secretKey("rh_bogus_abc"));
+                () -> RootHeraldClient.builder().secretKey("rh_bogus_abc"));
     }
 
     @Test
     void rejectsEmptyKey() {
         assertThrows(IllegalArgumentException.class,
-                () -> BackgroundCheckClient.builder().secretKey(""));
+                () -> RootHeraldClient.builder().secretKey(""));
     }
 
     @Test
-    void createChallengeSendsBearerSecret() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/challenge", 200,
+    void issueChallengeSendsBearerSecret() throws Exception {
+        RootHeraldClient client = start("/api/v1/attestations/challenge", 200,
                 "{\"challengeId\":\"ch_1\",\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}");
-        Challenge challenge = client.createChallenge("device-hint");
+        Challenge challenge = client.issueChallenge("device-hint");
         assertEquals("ch_1", challenge.challengeId());
         assertEquals("n_1", challenge.nonce());
         assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
@@ -100,8 +100,8 @@ class BackgroundCheckClientTest {
 
     @Test
     void attestPassVerdict() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
-        AttestResult result = client.attest("{\"quote\":\"...\"}",
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        AttestResult result = client.verify("{\"quote\":\"...\"}",
                 AttestOptions.of("ch_1"));
         // A genuinely PASSING device (token at verdict.device.verdict) maps to allow.
         assertEquals("allow", result.verdict());
@@ -113,7 +113,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void exposesTopLevelParityFields() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
         AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertEquals(List.of("urn:rootherald:assurance:hardware-backed"),
                 result.assuranceClaimsMet());
@@ -122,7 +122,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void surfacesEnrollmentRequiredSignal() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}},"
                         + "\"assuranceClaimsMet\":[],\"enrollmentRequired\":true}");
         AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
@@ -133,7 +133,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void parityFieldsDefaultWhenAbsent() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}}}");
         AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertTrue(result.assuranceClaimsMet().isEmpty());
@@ -142,7 +142,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void sendsRequestedDisclosureClassWhenSet() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
         client.verify("{}", AttestOptions.of("ch_1").requestedDisclosureClass("pseudonymous"));
         JsonNode sent = mapper.readTree(lastBody.get());
         assertEquals("pseudonymous", sent.get("requestedDisclosureClass").asText());
@@ -150,7 +150,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void omitsRequestedDisclosureClassWhenUnset() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200, PASSING_VERDICT);
         client.verify("{}", AttestOptions.of("ch_1"));
         JsonNode sent = mapper.readTree(lastBody.get());
         assertFalse(sent.has("requestedDisclosureClass"));
@@ -158,7 +158,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void exposesCohortFields() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{"
                         + "\"verdict\":\"pass\",\"ueid\":\"dev-9\","
                         + "\"cohortKey\":\"tpm20:win11:sb1:abc123\","
@@ -167,7 +167,7 @@ class BackgroundCheckClientTest {
                         + "\"cohortPrevalencePerPcr\":{\"0\":0.9,\"7\":0.5},"
                         + "\"cohortSampleSize\":1287,"
                         + "\"novelProfile\":false}}}");
-        AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertEquals("tpm20:win11:sb1:abc123", result.cohortKey());
         assertEquals("tenant-fleet", result.cohortScope());
         assertEquals(0.042, result.cohortPrevalence());
@@ -178,9 +178,9 @@ class BackgroundCheckClientTest {
 
     @Test
     void cohortFieldsNullWhenAbsent() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
-        AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertNull(result.cohortKey());
         assertNull(result.cohortPrevalence());
         assertNull(result.novelProfile());
@@ -189,54 +189,54 @@ class BackgroundCheckClientTest {
 
     @Test
     void failVerdictIsNotAnError() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}}}");
-        AttestResult result = client.attest("{}", AttestOptions.of("ch_1"));
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertEquals("deny", result.verdict());
     }
 
     @Test
     void maps401ToInvalidSecretKey() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 401,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 401,
                 "{\"error\":\"x\",\"message\":\"boom\"}");
         assertThrows(InvalidSecretKeyException.class,
-                () -> client.attest("{}", AttestOptions.of("ch_1")));
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
     }
 
     @Test
     void maps422ToUnknownPolicy() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 422,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 422,
                 "{\"message\":\"no such policy\"}");
         assertThrows(UnknownPolicyException.class,
-                () -> client.attest("{}", AttestOptions.of("ch_1").policy("nope")));
+                () -> client.verify("{}", AttestOptions.of("ch_1").policy("nope")));
     }
 
     @Test
     void maps409ToChallenge() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 409, "{}");
+        RootHeraldClient client = start("/api/v1/attestations/verify", 409, "{}");
         assertThrows(ChallengeException.class,
-                () -> client.attest("{}", AttestOptions.of("ch_1")));
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
     }
 
     @Test
     void maps400ToInvalidEvidence() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 400, "{}");
+        RootHeraldClient client = start("/api/v1/attestations/verify", 400, "{}");
         assertThrows(InvalidEvidenceException.class,
-                () -> client.attest("{}", AttestOptions.of("ch_1")));
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
     }
 
     @Test
     void maps429ToQuotaExceeded() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 429, "{}");
+        RootHeraldClient client = start("/api/v1/attestations/verify", 429, "{}");
         assertThrows(QuotaExceededException.class,
-                () -> client.attest("{}", AttestOptions.of("ch_1")));
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
     }
 
     // ── ABI backend-relay contract ────────────────────────────────────────
 
     @Test
     void issueChallengeIsTheCanonicalName() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/challenge", 200,
+        RootHeraldClient client = start("/api/v1/attestations/challenge", 200,
                 "{\"challengeId\":\"ch_1\",\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}");
         Challenge challenge = client.issueChallenge();
         assertEquals("ch_1", challenge.challengeId());
@@ -245,7 +245,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void verifyIsTheCanonicalName() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/attestations/verify", 200,
+        RootHeraldClient client = start("/api/v1/attestations/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
         AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
         assertTrue(result.isAllowed());
@@ -253,7 +253,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayEnrollFreshReturnsChallenge() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/enroll", 201,
+        RootHeraldClient client = start("/api/v1/devices/enroll", 201,
                 "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
         RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
                 .ekPublicKey("ekpub==")
@@ -270,7 +270,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayEnrollSendsCanonicalWireShape() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/enroll", 201,
+        RootHeraldClient client = start("/api/v1/devices/enroll", 201,
                 "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
         client.relayEnroll(EnrollRequestBlob.builder()
                 .ekPublicKey("ekpub==")
@@ -290,7 +290,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayEnrollAlreadyEnrolledSkipsActivate() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/enroll", 409,
+        RootHeraldClient client = start("/api/v1/devices/enroll", 409,
                 "{\"deviceId\":\"dev-7\"}");
         RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
                 .ekPublicKey("ekpub==")
@@ -304,7 +304,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayEnroll409MissingDeviceIdThrows() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/enroll", 409, "{}");
+        RootHeraldClient client = start("/api/v1/devices/enroll", 409, "{}");
         assertThrows(RootHeraldApiException.class,
                 () -> client.relayEnroll(EnrollRequestBlob.builder()
                         .ekPublicKey("ekpub==")
@@ -315,7 +315,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayEnrollMapsAuthError() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/enroll", 401,
+        RootHeraldClient client = start("/api/v1/devices/enroll", 401,
                 "{\"message\":\"bad key\"}");
         assertThrows(InvalidSecretKeyException.class,
                 () -> client.relayEnroll(EnrollRequestBlob.builder()
@@ -327,7 +327,7 @@ class BackgroundCheckClientTest {
 
     @Test
     void relayActivateReturnsTerminalBody() throws Exception {
-        BackgroundCheckClient client = start("/api/v1/devices/activate", 200,
+        RootHeraldClient client = start("/api/v1/devices/activate", 200,
                 "{\"deviceId\":\"dev-1\",\"status\":\"enrolled\",\"enrolledAt\":\"2030-01-01T00:00:00Z\"}");
         RelayActivateResponse result = client.relayActivate(
                 new EnrollActivationResponse("dev-1", "secret=="));

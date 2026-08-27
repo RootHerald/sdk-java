@@ -2,7 +2,7 @@
 
 [Root Herald](https://rootherald.io) device attestation from a Java backend. Plain Java + Spring Boot. Requires Java 17+.
 
-**Background-Check (server → server)** via `BackgroundCheckClient`: your dumb client collects an opaque evidence blob and hands it to *your* server, which appraises it with Root Herald using your `rh_sk_` secret key. The client never holds a key or talks to Root Herald.
+**Background-Check (server → server)** via `RootHeraldClient`: your dumb client collects an opaque evidence blob and hands it to *your* server, which appraises it with Root Herald using your `rh_sk_` secret key. The client never holds a key or talks to Root Herald.
 
 ## Install
 
@@ -19,7 +19,7 @@
 ```java
 // Construct with your SECRET key (rh_sk_…). Any key without the rh_sk_ prefix
 // is rejected.
-var rh = BackgroundCheckClient.builder()
+var rh = RootHeraldClient.builder()
     .secretKey(System.getenv("ROOTHERALD_SECRET_KEY"))
     .build();
 
@@ -37,7 +37,6 @@ if (!result.isAllowed()) {
 }
 ```
 
-`issueChallenge` / `verify` are the canonical ABI backend-relay names; the older `createChallenge` / `attest` remain as deprecated aliases.
 
 An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` (422), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
 
@@ -70,7 +69,7 @@ The client never holds the `rh_sk_` key and never talks to RootHerald; this back
 
 ## Spring Boot
 
-`BackgroundCheckClient` is a plain object — register it as a `@Bean` and inject it into your controllers. See [`samples/spring-boot-demo`](./samples/spring-boot-demo) for a runnable example (`POST /attest`).
+`RootHeraldClient` is a plain object — register it as a `@Bean` and inject it into your controllers. See [`samples/spring-boot-demo`](./samples/spring-boot-demo) for a runnable example (`POST /attest`).
 
 ## License
 

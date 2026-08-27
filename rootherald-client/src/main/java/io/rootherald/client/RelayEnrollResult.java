@@ -5,7 +5,7 @@ import java.util.Optional;
 
 /**
  * Resolved result of the enroll relay leg
- * ({@link BackgroundCheckClient#relayEnroll(EnrollRequestBlob)}), normalizing the
+ * ({@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}), normalizing the
  * asymmetric {@code 201}/{@code 409} HTTP outcomes of
  * {@code POST /api/v1/devices/enroll} into one shape so callers branch on
  * {@link #alreadyEnrolled()} instead of re-parsing HTTP status. Mirrors
@@ -15,7 +15,7 @@ import java.util.Optional;
  *   <li><b>{@code alreadyEnrolled() == false}</b> — fresh {@code 201} enroll:
  *       {@link #challenge()} is present; relay it to the client's
  *       {@code EnrollComplete}, then call
- *       {@link BackgroundCheckClient#relayActivate(EnrollActivationResponse)}.</li>
+ *       {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}.</li>
  *   <li><b>{@code alreadyEnrolled() == true}</b> — {@code 409} short-circuit: the
  *       device is already bound, so SKIP the activate leg and just use
  *       {@link #deviceId()}. No challenge.</li>
