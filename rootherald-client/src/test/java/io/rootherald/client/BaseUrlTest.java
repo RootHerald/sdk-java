@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
  */
 class BaseUrlTest {
 
-    private static BackgroundCheckClient.Builder builder() {
-        return BackgroundCheckClient.builder().secretKey("rh_sk_test_xxx");
+    private static RootHeraldClient.Builder builder() {
+        return RootHeraldClient.builder().secretKey("rh_sk_test_xxx");
     }
 
     @Test
