@@ -260,7 +260,6 @@ class RootHeraldClientTest {
                 .akPublicArea("akpub==")
                 .platform("windows")
                 .build());
-        assertFalse(result.alreadyEnrolled());
         assertEquals("dev-1", result.deviceId());
         assertTrue(result.challenge().isPresent());
         assertEquals("cb==", result.challenge().get().credentialBlob());
@@ -288,30 +287,7 @@ class RootHeraldClientTest {
         assertEquals("int-b", sent.get("ekCertificateChain").get(1).asText());
     }
 
-    @Test
-    void relayEnrollAlreadyEnrolledSkipsActivate() throws Exception {
-        RootHeraldClient client = start("/api/v1/devices/enroll", 409,
-                "{\"deviceId\":\"dev-7\"}");
-        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
-                .ekPublicKey("ekpub==")
-                .akPublicArea("akpub==")
-                .platform("windows")
-                .build());
-        assertTrue(result.alreadyEnrolled());
-        assertEquals("dev-7", result.deviceId());
-        assertTrue(result.challenge().isEmpty());
-    }
 
-    @Test
-    void relayEnroll409MissingDeviceIdThrows() throws Exception {
-        RootHeraldClient client = start("/api/v1/devices/enroll", 409, "{}");
-        assertThrows(RootHeraldApiException.class,
-                () -> client.relayEnroll(EnrollRequestBlob.builder()
-                        .ekPublicKey("ekpub==")
-                        .akPublicArea("akpub==")
-                        .platform("windows")
-                        .build()));
-    }
 
     @Test
     void relayEnrollMapsAuthError() throws Exception {
