@@ -34,7 +34,7 @@ import java.util.Objects;
  * <ol>
  *   <li>{@link #relayEnroll(EnrollRequestBlob)} — relay the one-time device-key
  *       bootstrap ({@code POST /api/v1/devices/enroll}); resolves the asymmetric
- *       {@code 201} (fresh) / {@code 409} (already enrolled) outcomes</li>
+ *       enroll challenge</li>
  *   <li>{@link #relayActivate(EnrollActivationResponse)} — complete the
  *       EK&rarr;AK credential-activation handshake
  *       ({@code POST /api/v1/devices/activate})</li>
@@ -161,17 +161,10 @@ public final class RootHeraldClient {
      * <p>
      * Relays the keyless client's {@code EnrollBegin()} blob to RootHerald with
      * the {@code rh_sk_} secret and resolves the asymmetric response:
-     * <ul>
-     *   <li><b>{@code 201}</b> — a fresh enroll; returns a
-     *       {@link RelayEnrollResult} with {@code alreadyEnrolled() == false} and
-     *       the {@link EnrollActivationChallenge}. Hand the challenge to the
-     *       client's {@code EnrollComplete}, then relay the result to
-     *       {@link #relayActivate(EnrollActivationResponse)}.</li>
-     *   <li><b>{@code 409}</b> — the device is already enrolled; returns
-     *       {@code alreadyEnrolled() == true} (no challenge). SKIP the activate
-     *       leg — just use {@link RelayEnrollResult#deviceId()}.</li>
-     * </ul>
-     * Other non-2xx statuses raise the matching {@link RootHeraldApiException}.
+     * <p>Returns the {@link EnrollActivationChallenge} to hand to the client's
+     * {@code EnrollComplete}, whose result goes to
+     * {@link #relayActivate(EnrollActivationResponse)}. Non-2xx statuses raise
+     * the matching {@link RootHeraldApiException}.
      *
      * @param blob the client's enroll request blob; relayed verbatim
      */
@@ -194,17 +187,6 @@ public final class RootHeraldClient {
 
         HttpResponse<String> resp = rawPost("/api/v1/devices/enroll", body);
         int status = resp.statusCode();
-
-        // 409 = already enrolled: the body carries only `deviceId`. Resolve it and
-        // signal "skip activate" instead of treating it as an error.
-        if (status == 409) {
-            JsonNode b = tryReadTree(resp.body());
-            String deviceId = b != null && b.hasNonNull("deviceId") ? b.get("deviceId").asText() : null;
-            if (deviceId == null || deviceId.isEmpty()) {
-                throw new RootHeraldApiException(409, "already-enrolled (409) response missing deviceId");
-            }
-            return RelayEnrollResult.alreadyEnrolled(deviceId);
-        }
 
         if (status / 100 != 2) {
             throw mapError(status, resp.body());
@@ -229,7 +211,7 @@ public final class RootHeraldClient {
      * Relays the client's {@code EnrollComplete()} blob (the decrypted credential
      * secret) to RootHerald, completing the EK&rarr;AK credential-activation
      * handshake. Call this only when {@link #relayEnroll(EnrollRequestBlob)}
-     * returned {@code alreadyEnrolled() == false}.
+     * challenge.
      *
      * @param activation the client's activation response; relayed verbatim
      * @return the terminal {@code {deviceId, status?, enrolledAt?}} body

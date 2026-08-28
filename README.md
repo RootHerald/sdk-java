@@ -42,7 +42,7 @@ An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an e
 
 ### Enroll relay (one-time device-key bootstrap)
 
-The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. `relayEnroll` resolves the asymmetric `201` (fresh) / `409` (already enrolled) outcomes into one result so you branch on `alreadyEnrolled()` instead of HTTP status.
+The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrolment returns a MakeCredential challenge, a device already known included — re-enrolment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
 
 ```java
 // Leg 1 — relay the client's EnrollBegin() blob.
@@ -53,16 +53,12 @@ RelayEnrollResult enroll = rh.relayEnroll(EnrollRequestBlob.builder()
     .ekCertPem(blob.ekCertPem())                  // optional
     .build());
 
-if (enroll.alreadyEnrolled()) {
-    bindDeviceToUser(enroll.deviceId());          // device already bound; done
-} else {
-    // Hand enroll.challenge() to the client's EnrollComplete(), then relay leg 2.
-    EnrollActivationChallenge challenge = enroll.challenge().get();
-    // ... client returns the decrypted secret ...
-    RelayActivateResponse activated = rh.relayActivate(
-        new EnrollActivationResponse(enroll.deviceId(), decryptedSecret));
-    bindDeviceToUser(activated.deviceId());
-}
+// Hand enroll.challenge() to the client's EnrollComplete(), then relay leg 2.
+EnrollActivationChallenge challenge = enroll.challenge();
+// ... client returns the decrypted secret ...
+RelayActivateResponse activated = rh.relayActivate(
+    new EnrollActivationResponse(enroll.deviceId(), decryptedSecret));
+bindDeviceToUser(activated.deviceId());
 ```
 
 The client never holds the `rh_sk_` key and never talks to RootHerald; this backend helper is the only thing that does. The verdict is computed by RootHerald and returned to your backend; it never travels through the client.

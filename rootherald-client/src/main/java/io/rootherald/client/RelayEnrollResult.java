@@ -1,68 +1,45 @@
 package io.rootherald.client;
 
 import java.util.Objects;
-import java.util.Optional;
 
 /**
- * Resolved result of the enroll relay leg
- * ({@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}), normalizing the
- * asymmetric {@code 201}/{@code 409} HTTP outcomes of
- * {@code POST /api/v1/devices/enroll} into one shape so callers branch on
- * {@link #alreadyEnrolled()} instead of re-parsing HTTP status. Mirrors
- * {@code @rootherald/contracts}' {@code RelayEnrollResult} union.
+ * Result of the enroll relay leg
+ * ({@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}). Mirrors
+ * {@code @rootherald/contracts}' {@code RelayEnrollResult}.
  *
- * <ul>
- *   <li><b>{@code alreadyEnrolled() == false}</b> — fresh {@code 201} enroll:
- *       {@link #challenge()} is present; relay it to the client's
- *       {@code EnrollComplete}, then call
- *       {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}.</li>
- *   <li><b>{@code alreadyEnrolled() == true}</b> — {@code 409} short-circuit: the
- *       device is already bound, so SKIP the activate leg and just use
- *       {@link #deviceId()}. No challenge.</li>
- * </ul>
+ * <p>Enrolment always issues a challenge, including for a device already known —
+ * re-enrolment is how a device rotates its attestation key, so short-circuiting
+ * it would make rotation impossible. Relay {@link #challenge()} to the client's
+ * {@code EnrollComplete}, then call
+ * {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}.
  *
- * Either way {@link #deviceId()} is resolved.
+ * <p>{@link #deviceId()} is THIS tenant's alias for the device, not a global
+ * identifier: another tenant enrolling the same silicon is told a different one.
  */
 public final class RelayEnrollResult {
 
-    private final boolean alreadyEnrolled;
     private final String deviceId;
     private final EnrollActivationChallenge challenge;
 
-    private RelayEnrollResult(boolean alreadyEnrolled, String deviceId, EnrollActivationChallenge challenge) {
-        this.alreadyEnrolled = alreadyEnrolled;
+    private RelayEnrollResult(String deviceId, EnrollActivationChallenge challenge) {
         this.deviceId = deviceId;
         this.challenge = challenge;
     }
 
-    /** A fresh ({@code 201}) enroll carrying the MakeCredential challenge. */
+    /** An enroll carrying the MakeCredential challenge. */
     public static RelayEnrollResult fresh(String deviceId, EnrollActivationChallenge challenge) {
         Objects.requireNonNull(deviceId, "deviceId");
         Objects.requireNonNull(challenge, "challenge");
-        return new RelayEnrollResult(false, deviceId, challenge);
+        return new RelayEnrollResult(deviceId, challenge);
     }
 
-    /** An already-enrolled ({@code 409}) short-circuit; the activate leg is skipped. */
-    public static RelayEnrollResult alreadyEnrolled(String deviceId) {
-        Objects.requireNonNull(deviceId, "deviceId");
-        return new RelayEnrollResult(true, deviceId, null);
-    }
-
-    /** Whether the device was already bound ({@code 409}); if so, skip activate. */
-    public boolean alreadyEnrolled() {
-        return alreadyEnrolled;
-    }
-
-    /** The resolved device id (UUID), present in both branches. */
+    /** This tenant's alias for the device. */
     public String deviceId() {
         return deviceId;
     }
 
-    /**
-     * The MakeCredential challenge for a fresh enroll; empty when
-     * {@link #alreadyEnrolled()} is {@code true}.
-     */
-    public Optional<EnrollActivationChallenge> challenge() {
-        return Optional.ofNullable(challenge);
+    /** The MakeCredential challenge to relay to the client. */
+    public EnrollActivationChallenge challenge() {
+        return challenge;
     }
 }
