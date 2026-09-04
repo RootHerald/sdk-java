@@ -261,9 +261,9 @@ class RootHeraldClientTest {
                 .platform("windows")
                 .build());
         assertEquals("dev-1", result.deviceId());
-        assertTrue(result.challenge().isPresent());
-        assertEquals("cb==", result.challenge().get().credentialBlob());
-        assertEquals("es==", result.challenge().get().encryptedSecret());
+        assertNotNull(result.challenge());
+        assertEquals("cb==", result.challenge().credentialBlob());
+        assertEquals("es==", result.challenge().encryptedSecret());
         assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
     }
 
