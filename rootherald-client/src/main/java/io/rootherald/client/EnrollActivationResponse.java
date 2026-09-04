@@ -1,7 +1,7 @@
 package io.rootherald.client;
 
 /**
- * {@code EnrollComplete()} output — the body of {@code POST /api/v1/devices/activate}.
+ * {@code EnrollComplete()} output — the body of {@code POST /api/v1/attest/activate}.
  * <p>
  * Produced by the keyless client (which decrypted the challenge inside the TPM)
  * and relayed by the backend via

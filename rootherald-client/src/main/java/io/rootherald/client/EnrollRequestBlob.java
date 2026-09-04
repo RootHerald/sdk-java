@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * {@code EnrollBegin()} output — the body of {@code POST /api/v1/devices/enroll}.
+ * {@code EnrollBegin()} output — the body of {@code POST /api/v1/attest/enroll}.
  * <p>
  * Produced by the customer's keyless client and relayed verbatim by the
  * customer's backend via {@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}.

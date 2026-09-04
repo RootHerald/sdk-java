@@ -2,7 +2,7 @@ package io.rootherald.client;
 
 /**
  * The {@code TPM2_MakeCredential} challenge — the {@code 201} response body of
- * {@code POST /api/v1/devices/enroll}, and the input to the client's
+ * {@code POST /api/v1/attest/enroll}, and the input to the client's
  * {@code EnrollComplete()}.
  * <p>
  * Mirrors {@code @rootherald/contracts}' {@code EnrollActivationChallenge}.
