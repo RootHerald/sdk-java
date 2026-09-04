@@ -33,15 +33,15 @@ import java.util.Objects;
  * four helpers of the canonical {@code @rootherald/node} backend-relay contract:
  * <ol>
  *   <li>{@link #relayEnroll(EnrollRequestBlob)} — relay the one-time device-key
- *       bootstrap ({@code POST /api/v1/devices/enroll}); resolves the asymmetric
+ *       bootstrap ({@code POST /api/v1/attest/enroll}); resolves the asymmetric
  *       enroll challenge</li>
  *   <li>{@link #relayActivate(EnrollActivationResponse)} — complete the
  *       EK&rarr;AK credential-activation handshake
- *       ({@code POST /api/v1/devices/activate})</li>
+ *       ({@code POST /api/v1/attest/activate})</li>
  *   <li>{@link #issueChallenge()} — mint a relay-friendly nonce
- *       ({@code POST /api/v1/attestations/challenge})</li>
+ *       ({@code POST /api/v1/attest/challenge})</li>
  *   <li>{@link #verify(String, AttestOptions)} — submit the evidence blob for
- *       appraisal and get a verdict ({@code POST /api/v1/attestations/verify})</li>
+ *       appraisal and get a verdict ({@code POST /api/v1/attest/verify})</li>
  * </ol>
  * <p>
  * The verdict is computed by RootHerald and returned here, to the customer's
@@ -73,7 +73,7 @@ public final class RootHeraldClient {
     }
 
     /**
-     * POST {baseUrl}/api/v1/attestations/challenge — mint a relay-friendly
+     * POST {baseUrl}/api/v1/attest/challenge — mint a relay-friendly
      * nonce. Relay {@link Challenge#nonce()} to the client; it quotes over it,
      * then submit the resulting evidence with
      * {@link #verify(String, AttestOptions)} using
@@ -91,7 +91,7 @@ public final class RootHeraldClient {
         if (deviceHint != null) {
             body.put("deviceHint", deviceHint);
         }
-        JsonNode data = post("/api/v1/attestations/challenge", body);
+        JsonNode data = post("/api/v1/attest/challenge", body);
         JsonNode id = data.get("challengeId");
         JsonNode nonce = data.get("nonce");
         JsonNode expiresAt = data.get("expiresAt");
@@ -102,7 +102,7 @@ public final class RootHeraldClient {
     }
 
     /**
-     * POST {baseUrl}/api/v1/attestations/verify — submit the opaque evidence
+     * POST {baseUrl}/api/v1/attest/verify — submit the opaque evidence
      * blob for server-side appraisal and return the verdict.
      * <p>
      * An un-enrolled / failing device is NOT an error — it returns a normal
@@ -131,7 +131,7 @@ public final class RootHeraldClient {
             body.put("requestedDisclosureClass", opts.requestedDisclosureClass());
         }
 
-        JsonNode data = post("/api/v1/attestations/verify", body);
+        JsonNode data = post("/api/v1/attest/verify", body);
         JsonNode verdictNode = data.get("verdict");
         if (verdictNode == null || !verdictNode.isObject()) {
             throw new RootHeraldApiException(200, "verify response missing verdict");
@@ -157,7 +157,7 @@ public final class RootHeraldClient {
     }
 
     /**
-     * Enroll relay — leg 1. POST {baseUrl}/api/v1/devices/enroll.
+     * Enroll relay — leg 1. POST {baseUrl}/api/v1/attest/enroll.
      * <p>
      * Relays the keyless client's {@code EnrollBegin()} blob to RootHerald with
      * the {@code rh_sk_} secret and resolves the asymmetric response:
@@ -185,7 +185,7 @@ public final class RootHeraldClient {
             blob.ekCertificateChain().forEach(chain::add);
         }
 
-        HttpResponse<String> resp = rawPost("/api/v1/devices/enroll", body);
+        HttpResponse<String> resp = rawPost("/api/v1/attest/enroll", body);
         int status = resp.statusCode();
 
         if (status / 100 != 2) {
@@ -206,7 +206,7 @@ public final class RootHeraldClient {
     }
 
     /**
-     * Enroll relay — leg 2. POST {baseUrl}/api/v1/devices/activate.
+     * Enroll relay — leg 2. POST {baseUrl}/api/v1/attest/activate.
      * <p>
      * Relays the client's {@code EnrollComplete()} blob (the decrypted credential
      * secret) to RootHerald, completing the EK&rarr;AK credential-activation
@@ -226,7 +226,7 @@ public final class RootHeraldClient {
             body.put("akPublicKey", activation.akPublicKey());
         }
 
-        JsonNode data = post("/api/v1/devices/activate", body);
+        JsonNode data = post("/api/v1/attest/activate", body);
         JsonNode deviceId = data.get("deviceId");
         if (deviceId == null || !deviceId.isTextual()) {
             throw new RootHeraldApiException(200, "activate response missing deviceId");

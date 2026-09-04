@@ -1,7 +1,7 @@
 package io.rootherald.client;
 
 /**
- * Response of the activate relay leg — {@code POST /api/v1/devices/activate}.
+ * Response of the activate relay leg — {@code POST /api/v1/attest/activate}.
  * <p>
  * Mirrors {@code @rootherald/contracts}' {@code RelayActivateResponse}. The
  * migration contract treats {@link #deviceId()} as the load-bearing field the
