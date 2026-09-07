@@ -155,6 +155,9 @@ class KeySignaturesTest {
                 new Jwk("EC", "P-256", "", f.jwk().y()), MESSAGE, sig));
         assertThrows(IllegalArgumentException.class, () -> KeySignatures.verifyKeySignature(
                 new Jwk("EC", "P-256", "!!not-base64url!!", f.jwk().y()), MESSAGE, sig));
+        // A well-formed pair of coordinates that is not a point on the curve.
+        assertThrows(IllegalArgumentException.class, () -> KeySignatures.verifyKeySignature(
+                new Jwk("EC", "P-256", f.jwk().x(), f.jwk().x()), MESSAGE, sig));
     }
 
     @Test

@@ -101,7 +101,7 @@ class RootHeraldClientTest {
 
     private static final String CHALLENGE_WITH_ASK =
             "{\"challengeId\":\"ch_1\",\"challenge\":\"rhc1.bm9uY2U.eyJhc2siOlsia2V5Il19\","
-                    + "\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}");
+                    + "\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}";
 
     @Test
     void issueChallengeWithOptionsSendsTheAsk() throws Exception {
@@ -203,10 +203,10 @@ class RootHeraldClientTest {
         UnknownPolicyException ex = assertThrows(UnknownPolicyException.class,
                 () -> client.verify("{}", AttestOptions.of("ch_1")));
         assertEquals("unknown_policy", ex.errorCode());
-        client = start("/api/v1/attest/verify", 409,
+        RootHeraldClient conflicting = start("/api/v1/attest/verify", 409,
                 "{\"error\":\"challenge_expired_or_used\",\"detail\":\"used\"}");
         ChallengeException ch = assertThrows(ChallengeException.class,
-                () -> client.verify("{}", AttestOptions.of("ch_1")));
+                () -> conflicting.verify("{}", AttestOptions.of("ch_1")));
         assertEquals("challenge_expired_or_used", ch.errorCode());
         assertEquals("used", ch.getMessage());
     }

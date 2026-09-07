@@ -7,10 +7,12 @@ import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.Signature;
+import java.security.spec.ECFieldFp;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
+import java.security.spec.EllipticCurve;
 import java.util.Base64;
 import java.util.Objects;
 
@@ -83,7 +85,25 @@ public final class KeySignatures {
         AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
         params.init(new ECGenParameterSpec(curve.jcaName));
         ECParameterSpec spec = params.getParameterSpec(ECParameterSpec.class);
+        requireOnCurve(x, y, spec.getCurve());
         return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(new ECPoint(x, y), spec));
+    }
+
+    /**
+     * y^2 = x^3 + ax + b over the prime field. The JCA does not always check
+     * this when building the key, and a point off the curve is a bad JWK, not
+     * a bad signature.
+     */
+    private static void requireOnCurve(BigInteger x, BigInteger y, EllipticCurve curve) {
+        BigInteger p = ((ECFieldFp) curve.getField()).getP();
+        if (x.signum() < 0 || x.compareTo(p) >= 0 || y.signum() < 0 || y.compareTo(p) >= 0) {
+            throw new IllegalArgumentException("jwk point is not on " + curve);
+        }
+        BigInteger lhs = y.multiply(y).mod(p);
+        BigInteger rhs = x.pow(3).add(curve.getA().multiply(x)).add(curve.getB()).mod(p);
+        if (!lhs.equals(rhs)) {
+            throw new IllegalArgumentException("jwk point is not on the curve");
+        }
     }
 
     private static byte[] base64Url(String value, String field) {
