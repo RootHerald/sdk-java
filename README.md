@@ -23,13 +23,15 @@ var rh = RootHeraldClient.builder()
     .secretKey(System.getenv("ROOTHERALD_SECRET_KEY"))
     .build();
 
-// 1) Mint a relay-friendly nonce; send challenge.nonce() down to the client.
-Challenge challenge = rh.issueChallenge();
+// 1) Mint a challenge; relay challenge.challenge() to the client verbatim.
+//    The challenge carries the ask: what the device must prove is fixed here.
+Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
+    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE)   // the default when omitted
+    .policy("rootherald:builtin:strict-hardware"));                     // optional, bound to the challenge
 
-// 2) The client quotes over the nonce and returns an opaque evidence blob
+// 2) The client quotes over the challenge and returns an opaque evidence blob
 //    (JSON); submit it for appraisal.
-AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId())
-    .policy("rootherald:builtin:strict-hardware")); // optional
+AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
 
 if (!result.isAllowed()) {
     response.setStatus(403);
@@ -37,21 +39,44 @@ if (!result.isAllowed()) {
 }
 ```
 
+A policy named at verify time may only tighten the challenge's; a looser one is
+refused with `PolicyDowngradeException` (422 `policy_downgrade`).
 
-An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` (422), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` / `PolicyDowngradeException` / `AdmissionRefusedException` (422, told apart by `errorCode()`), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+
+### Certified device key
+
+Ask for `key` and a passing verdict also certifies a fresh TPM-resident P-256
+signing key. Store the `CertifiedKey` against the user; later signatures from
+the device verify locally, with no Root Herald call.
+
+```java
+Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
+    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_KEY)
+    .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN));
+
+AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
+CertifiedKey key = result.key().orElseThrow();   // present only on a pass with a key ask
+store(userId, key.keyId(), key.jwk());
+
+// Later: the device signed `message` with that key (raw r||s or DER).
+boolean ok = KeySignatures.verifyKeySignature(key.jwk(), message, signature);
+```
 
 ### Enroll relay (one-time device-key bootstrap)
 
 The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrolment returns a MakeCredential challenge, a device already known included — re-enrolment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
 
 ```java
-// Leg 1 — relay the client's EnrollBegin() blob.
+// Leg 1 — relay the client's EnrollBegin() blob. Pass a live challenge id to
+// run admission against that challenge's policy; a device that could never
+// satisfy it is refused with AdmissionRefusedException (422 admission_refused).
 RelayEnrollResult enroll = rh.relayEnroll(EnrollRequestBlob.builder()
     .ekPublicKey(blob.ekPublicKey())
     .akPublicArea(blob.akPublicArea())
     .platform("windows")
     .ekCertPem(blob.ekCertPem())                  // optional
-    .build());
+    .build(), challenge.challengeId());           // challengeId optional
 
 // Hand enroll.challenge() to the client's EnrollComplete(), then relay leg 2.
 EnrollActivationChallenge challenge = enroll.challenge();
@@ -65,7 +90,7 @@ The client never holds the `rh_sk_` key and never talks to RootHerald; this back
 
 ## Spring Boot
 
-`RootHeraldClient` is a plain object — register it as a `@Bean` and inject it into your controllers. See [`samples/spring-boot-demo`](./samples/spring-boot-demo) for a runnable example (`POST /attest`).
+`RootHeraldClient` is a plain object — register it as a `@Bean` and inject it into your controllers. See [`samples/spring-boot-demo`](./samples/spring-boot-demo) for a runnable example (`POST /challenge`, `POST /attest`, `POST /verify-signature`).
 
 ## License
 

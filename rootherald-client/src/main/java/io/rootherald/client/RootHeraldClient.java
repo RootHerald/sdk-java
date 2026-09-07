@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
+import io.rootherald.PolicyDowngradeException;
 import io.rootherald.QuotaExceededException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.RootHeraldException;
@@ -15,14 +17,19 @@ import io.rootherald.UnknownPolicyException;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Server -&gt; server Background-Check client.
@@ -38,8 +45,8 @@ import java.util.Objects;
  *   <li>{@link #relayActivate(EnrollActivationResponse)} — complete the
  *       EK&rarr;AK credential-activation handshake
  *       ({@code POST /api/v1/attest/activate})</li>
- *   <li>{@link #issueChallenge()} — mint a relay-friendly nonce
- *       ({@code POST /api/v1/attest/challenge})</li>
+ *   <li>{@link #issueChallenge(ChallengeOptions)} — mint a challenge carrying
+ *       the ask ({@code POST /api/v1/attest/challenge})</li>
  *   <li>{@link #verify(String, AttestOptions)} — submit the evidence blob for
  *       appraisal and get a verdict ({@code POST /api/v1/attest/verify})</li>
  * </ol>
@@ -73,23 +80,45 @@ public final class RootHeraldClient {
     }
 
     /**
-     * POST {baseUrl}/api/v1/attest/challenge — mint a relay-friendly
-     * nonce. Relay {@link Challenge#nonce()} to the client; it quotes over it,
-     * then submit the resulting evidence with
-     * {@link #verify(String, AttestOptions)} using
-     * {@link Challenge#challengeId()}.
+     * POST {baseUrl}/api/v1/attest/challenge with the server default ask
+     * (identity + posture). See {@link #issueChallenge(ChallengeOptions)}.
      */
     public Challenge issueChallenge() {
-        return issueChallenge(null);
+        return issueChallenge(ChallengeOptions.defaults());
     }
 
     /**
      * As {@link #issueChallenge()}, with an optional advisory device hint.
      */
     public Challenge issueChallenge(String deviceHint) {
+        return issueChallenge(ChallengeOptions.defaults().deviceHint(deviceHint));
+    }
+
+    /**
+     * POST {baseUrl}/api/v1/attest/challenge — mint a challenge that carries
+     * the ask. Relay {@link Challenge#challenge()} to the client verbatim; it
+     * quotes over it, then submit the resulting evidence with
+     * {@link #verify(String, AttestOptions)} using
+     * {@link Challenge#challengeId()}.
+     * <p>
+     * What the device must prove is fixed here, not at verify time: a policy
+     * named on the challenge is stored with it, and verify may only tighten it.
+     */
+    public Challenge issueChallenge(ChallengeOptions opts) {
+        Objects.requireNonNull(opts, "opts");
         ObjectNode body = mapper.createObjectNode();
-        if (deviceHint != null) {
-            body.put("deviceHint", deviceHint);
+        if (opts.deviceHint() != null) {
+            body.put("deviceHint", opts.deviceHint());
+        }
+        if (opts.ask() != null && !opts.ask().isEmpty()) {
+            ArrayNode ask = body.putArray("ask");
+            opts.ask().forEach(ask::add);
+        }
+        if (opts.policy() != null) {
+            body.put("policy", opts.policy());
+        }
+        if (opts.keyPurpose() != null) {
+            body.put("keyPurpose", opts.keyPurpose());
         }
         JsonNode data = post("/api/v1/attest/challenge", body);
         JsonNode id = data.get("challengeId");
@@ -98,7 +127,8 @@ public final class RootHeraldClient {
         if (id == null || nonce == null || expiresAt == null) {
             throw new RootHeraldApiException(200, "challenge response missing challengeId/nonce/expiresAt");
         }
-        return new Challenge(id.asText(), nonce.asText(), expiresAt.asText());
+        String challenge = data.hasNonNull("challenge") ? data.get("challenge").asText() : null;
+        return new Challenge(id.asText(), challenge, nonce.asText(), expiresAt.asText());
     }
 
     /**
@@ -153,7 +183,36 @@ public final class RootHeraldClient {
         }
         boolean enrollmentRequired = data.path("enrollmentRequired").asBoolean(false);
 
-        return new AttestResult(AttestResult.normalize(raw), verdictNode, claims, enrollmentRequired);
+        // `key` is a top-level sibling too, present only on a passing verdict
+        // for a challenge that asked for a key.
+        Optional<CertifiedKey> key = data.hasNonNull("key")
+                ? Optional.of(parseCertifiedKey(data.get("key")))
+                : Optional.empty();
+
+        return new AttestResult(AttestResult.normalize(raw), verdictNode, claims, enrollmentRequired, key);
+    }
+
+    private CertifiedKey parseCertifiedKey(JsonNode node) {
+        JsonNode jwk = node.get("jwk");
+        if (!node.hasNonNull("keyId") || !node.hasNonNull("certifiedAt")
+                || jwk == null || !jwk.isObject()
+                || !jwk.hasNonNull("kty") || !jwk.hasNonNull("crv")
+                || !jwk.hasNonNull("x") || !jwk.hasNonNull("y")) {
+            throw new RootHeraldApiException(200, "verify response key missing keyId/jwk/certifiedAt");
+        }
+        Instant certifiedAt;
+        try {
+            certifiedAt = Instant.parse(node.get("certifiedAt").asText());
+        } catch (DateTimeParseException ex) {
+            throw new RootHeraldApiException(200, "verify response key.certifiedAt is not an instant");
+        }
+        return new CertifiedKey(
+                node.get("keyId").asText(),
+                new Jwk(jwk.get("kty").asText(), jwk.get("crv").asText(),
+                        jwk.get("x").asText(), jwk.get("y").asText()),
+                node.hasNonNull("purpose") ? node.get("purpose").asText() : null,
+                node.hasNonNull("authPolicy") ? node.get("authPolicy").asText() : null,
+                certifiedAt);
     }
 
     /**
@@ -169,6 +228,20 @@ public final class RootHeraldClient {
      * @param blob the client's enroll request blob; relayed verbatim
      */
     public RelayEnrollResult relayEnroll(EnrollRequestBlob blob) {
+        return relayEnroll(blob, null);
+    }
+
+    /**
+     * As {@link #relayEnroll(EnrollRequestBlob)}, admitted against a live
+     * challenge: the server runs admission against the policy stored on that
+     * challenge instead of the tenant default, so a device that could never
+     * satisfy it is refused before it gets an AK
+     * ({@link AdmissionRefusedException}).
+     *
+     * @param challengeId a challenge id from {@link #issueChallenge(ChallengeOptions)},
+     *                    sent as the {@code challengeId} query parameter; {@code null} to omit
+     */
+    public RelayEnrollResult relayEnroll(EnrollRequestBlob blob, String challengeId) {
         Objects.requireNonNull(blob, "blob");
 
         ObjectNode body = mapper.createObjectNode();
@@ -185,7 +258,11 @@ public final class RootHeraldClient {
             blob.ekCertificateChain().forEach(chain::add);
         }
 
-        HttpResponse<String> resp = rawPost("/api/v1/attest/enroll", body);
+        String path = "/api/v1/attest/enroll";
+        if (challengeId != null && !challengeId.isEmpty()) {
+            path += "?challengeId=" + URLEncoder.encode(challengeId, StandardCharsets.UTF_8);
+        }
+        HttpResponse<String> resp = rawPost(path, body);
         int status = resp.statusCode();
 
         if (status / 100 != 2) {
@@ -202,7 +279,8 @@ public final class RootHeraldClient {
         }
         EnrollActivationChallenge challenge = new EnrollActivationChallenge(
                 deviceId.asText(), credentialBlob.asText(), encryptedSecret.asText());
-        return RelayEnrollResult.fresh(deviceId.asText(), challenge);
+        String echoedChallengeId = data.hasNonNull("challengeId") ? data.get("challengeId").asText() : null;
+        return RelayEnrollResult.fresh(deviceId.asText(), challenge, echoedChallengeId);
     }
 
     /**
@@ -247,8 +325,7 @@ public final class RootHeraldClient {
 
     /**
      * Issue an authenticated JSON POST, returning the raw response. Status
-     * interpretation is left to the caller — used by the enroll relay leg, which
-     * must treat {@code 409} as "already enrolled" rather than an error.
+     * interpretation is left to the caller. {@code path} may carry a query string.
      */
     private HttpResponse<String> rawPost(String path, JsonNode body) {
         URI endpoint = baseUri.resolve(path);
@@ -289,38 +366,67 @@ public final class RootHeraldClient {
 
     /** Parse a body unknown-safely, returning {@code null} on any failure. */
     private JsonNode tryReadTree(String body) {
+        if (body == null) {
+            return null;
+        }
         try {
             return mapper.readTree(body);
-        } catch (IOException ex) {
+        } catch (IOException | RuntimeException ex) {
             return null;
         }
     }
 
-    /** Map a non-2xx status to the matching typed exception, mirroring @rootherald/node. */
+    /**
+     * Map a non-2xx status to the matching typed exception, mirroring
+     * @rootherald/node. A 422 is split on the server's {@code error} code:
+     * {@code policy_downgrade} and {@code admission_refused} get their own
+     * types; anything else is the policy-resolution failure.
+     */
     private RootHeraldApiException mapError(int status, String body) {
-        String message = extractMessage(body);
+        JsonNode tree = tryReadTree(body);
+        String code = extractErrorCode(tree);
+        String message = extractMessage(tree);
         return switch (status) {
-            case 401 -> new InvalidSecretKeyException(message);
-            case 422 -> new UnknownPolicyException(message);
-            case 409 -> new ChallengeException(message);
-            case 400 -> new InvalidEvidenceException(message);
-            case 429 -> new QuotaExceededException(message);
-            default -> new RootHeraldApiException(status,
+            case 401 -> new InvalidSecretKeyException(code, message);
+            case 422 -> {
+                if (PolicyDowngradeException.ERROR_CODE.equals(code)) {
+                    yield new PolicyDowngradeException(message);
+                }
+                if (AdmissionRefusedException.ERROR_CODE.equals(code)) {
+                    yield new AdmissionRefusedException(message);
+                }
+                yield new UnknownPolicyException(code, message);
+            }
+            case 409 -> new ChallengeException(code, message);
+            case 400 -> new InvalidEvidenceException(code, message);
+            case 429 -> new QuotaExceededException(code, message);
+            default -> new RootHeraldApiException(status, code,
                     message != null ? message : "RootHerald API error (HTTP " + status + ")");
         };
     }
 
-    private String extractMessage(String body) {
-        try {
-            JsonNode tree = mapper.readTree(body);
-            if (tree.hasNonNull("message")) {
-                return tree.get("message").asText();
+    /** The server's {@code error} discriminator ({@code code} accepted too), or {@code null}. */
+    private static String extractErrorCode(JsonNode tree) {
+        if (tree == null) {
+            return null;
+        }
+        if (tree.hasNonNull("error") && tree.get("error").isTextual()) {
+            return tree.get("error").asText();
+        }
+        if (tree.hasNonNull("code") && tree.get("code").isTextual()) {
+            return tree.get("code").asText();
+        }
+        return null;
+    }
+
+    private static String extractMessage(JsonNode tree) {
+        if (tree == null) {
+            return null;
+        }
+        for (String field : new String[] {"message", "detail", "error_description"}) {
+            if (tree.hasNonNull(field) && tree.get(field).isTextual()) {
+                return tree.get(field).asText();
             }
-            if (tree.hasNonNull("error_description")) {
-                return tree.get("error_description").asText();
-            }
-        } catch (IOException ignored) {
-            // non-JSON body — fall through
         }
         return null;
     }

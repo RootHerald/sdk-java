@@ -5,6 +5,10 @@ public class InvalidSecretKeyException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 
     public InvalidSecretKeyException(String message) {
-        super(401, message);
+        this(null, message);
+    }
+
+    public InvalidSecretKeyException(String errorCode, String message) {
+        super(401, errorCode, message);
     }
 }

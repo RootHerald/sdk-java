@@ -5,6 +5,10 @@ public class QuotaExceededException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 
     public QuotaExceededException(String message) {
-        super(429, message);
+        this(null, message);
+    }
+
+    public QuotaExceededException(String errorCode, String message) {
+        super(429, errorCode, message);
     }
 }

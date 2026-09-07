@@ -23,6 +23,7 @@
     <modules>
         <module>rootherald-core</module>
         <module>rootherald-client</module>
+        <module>samples/spring-boot-demo</module>
     </modules>
 
     <properties>

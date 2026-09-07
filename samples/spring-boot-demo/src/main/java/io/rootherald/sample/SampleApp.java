@@ -2,8 +2,11 @@ package io.rootherald.sample;
 
 import io.rootherald.client.AttestOptions;
 import io.rootherald.client.AttestResult;
-import io.rootherald.client.BackgroundCheckClient;
+import io.rootherald.client.CertifiedKey;
 import io.rootherald.client.Challenge;
+import io.rootherald.client.ChallengeOptions;
+import io.rootherald.client.KeySignatures;
+import io.rootherald.client.RootHeraldClient;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -13,14 +16,23 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Runnable Spring Boot sample showing the Root Herald Background-Check path.
+ * Runnable Spring Boot sample of the Root Herald server -&gt; server flow with
+ * a certified device key.
  *
- * <p>Background-Check (server -&gt; server): {@code POST /attest} with the
- * dumb client's opaque evidence JSON as the body; this server appraises it with
- * the {@code rh_sk_} secret key. Set {@code ROOTHERALD_SECRET_KEY} to enable it.
+ * <p>Set {@code ROOTHERALD_SECRET_KEY} and the three routes come alive:
+ * <ol>
+ *   <li>{@code POST /challenge} — mint a challenge asking for identity,
+ *       posture and a signing key; relay {@code challenge} to the client</li>
+ *   <li>{@code POST /attest} — appraise the client's evidence; on a pass,
+ *       keep the certified key</li>
+ *   <li>{@code POST /verify-signature} — check a later signature from the
+ *       device against the stored key, locally, with no Root Herald call</li>
+ * </ol>
  */
 @SpringBootApplication
 public class SampleApp {
@@ -28,38 +40,81 @@ public class SampleApp {
         SpringApplication.run(SampleApp.class, args);
     }
 
-    /**
-     * Background-Check — the dumb client POSTs its opaque evidence blob here;
-     * this server appraises it with Root Herald using the rh_sk_ secret key.
-     * The client never holds a key or calls Root Herald directly.
-     */
     @RestController
     public static class AttestController {
-        private final BackgroundCheckClient rh;
+        private final RootHeraldClient rh;
+        /** Certified keys by keyId. A real backend stores these against the user. */
+        private final Map<String, CertifiedKey> keys = new ConcurrentHashMap<>();
 
         public AttestController() {
+            // A plain object; in a real app register it once as a @Bean.
             String secretKey = System.getenv("ROOTHERALD_SECRET_KEY");
             this.rh = secretKey == null ? null
-                    : BackgroundCheckClient.builder().secretKey(secretKey).build();
+                    : RootHeraldClient.builder().secretKey(secretKey).build();
         }
 
-        @PostMapping("/attest")
-        public ResponseEntity<Map<String, Object>> attest(@RequestBody String evidence) {
+        /** 1) Mint a challenge that carries the ask; hand {@code challenge} to the client. */
+        @PostMapping("/challenge")
+        public ResponseEntity<?> challenge() {
             if (rh == null) {
-                return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
-                        .body(Map.of("error", "set ROOTHERALD_SECRET_KEY to enable /attest"));
+                return notConfigured();
             }
-            // 1) mint a nonce; in production hand challenge.nonce() to the client
-            //    first, then receive the evidence it produced. Compressed here.
-            Challenge challenge = rh.issueChallenge();
-            // 2) appraise the opaque evidence the client posted.
-            AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
+            Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
+                    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE, ChallengeOptions.ASK_KEY)
+                    .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN));
+            return ResponseEntity.ok(challenge);
+        }
+
+        /**
+         * 2) The client quoted over the challenge and posts its opaque evidence
+         * here with the challenge id; appraise it with the rh_sk_ secret key.
+         */
+        @PostMapping("/attest")
+        public ResponseEntity<Map<String, Object>> attest(@RequestBody AttestBody body) {
+            if (rh == null) {
+                return notConfigured();
+            }
+            AttestResult result = rh.verify(body.evidence(), AttestOptions.of(body.challengeId()));
             if (!result.isAllowed()) {
                 // An un-enrolled / failing device is a verdict, not an error.
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body(Map.of("ok", false, "verdict", result.verdict()));
+                        .body(Map.of("ok", false, "verdict", result.verdict(),
+                                "enrollmentRequired", result.enrollmentRequired()));
             }
-            return ResponseEntity.ok(Map.of("ok", true, "verdict", result.verdict()));
+            // The key is present only on a pass for a challenge that asked for one.
+            result.key().ifPresent(k -> keys.put(k.keyId(), k));
+            return ResponseEntity.ok(Map.of("ok", true, "verdict", result.verdict(),
+                    "keyId", result.key().map(CertifiedKey::keyId).orElse("")));
         }
+
+        /**
+         * 3) Later, the device signs something with its TPM-resident key. Check
+         * it against the JWK from the attestation; no Root Herald call.
+         */
+        @PostMapping("/verify-signature")
+        public ResponseEntity<Map<String, Object>> verifySignature(@RequestBody SignatureBody body) {
+            CertifiedKey key = keys.get(body.keyId());
+            if (key == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "unknown keyId"));
+            }
+            boolean valid = KeySignatures.verifyKeySignature(key.jwk(),
+                    Base64.getDecoder().decode(body.message()),
+                    Base64.getDecoder().decode(body.signature()));
+            return ResponseEntity.status(valid ? HttpStatus.OK : HttpStatus.FORBIDDEN)
+                    .body(Map.of("valid", valid));
+        }
+
+        private static ResponseEntity<Map<String, Object>> notConfigured() {
+            return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
+                    .body(Map.of("error", "set ROOTHERALD_SECRET_KEY to enable this route"));
+        }
+    }
+
+    /** {@code evidence} is the client's opaque JSON, passed through verbatim. */
+    public record AttestBody(String challengeId, String evidence) {
+    }
+
+    /** {@code message} and {@code signature} are base64. */
+    public record SignatureBody(String keyId, String message, String signature) {
     }
 }

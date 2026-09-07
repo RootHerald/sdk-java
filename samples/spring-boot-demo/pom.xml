@@ -28,7 +28,7 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
-        <!-- BackgroundCheckClient for the server -> server attest endpoint. -->
+        <!-- RootHeraldClient for the server -> server attest endpoints. -->
         <dependency>
             <groupId>io.rootherald</groupId>
             <artifactId>rootherald-client</artifactId>
