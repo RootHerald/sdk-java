@@ -5,6 +5,10 @@ public class ChallengeException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 
     public ChallengeException(String message) {
-        super(409, message);
+        this(null, message);
+    }
+
+    public ChallengeException(String errorCode, String message) {
+        super(409, errorCode, message);
     }
 }

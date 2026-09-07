@@ -7,7 +7,9 @@ package io.rootherald;
  *
  * <ul>
  *   <li>401 → {@link InvalidSecretKeyException}</li>
- *   <li>422 → {@link UnknownPolicyException}</li>
+ *   <li>422 → {@link UnknownPolicyException}, or by server code
+ *       {@link PolicyDowngradeException} ({@code policy_downgrade}) /
+ *       {@link AdmissionRefusedException} ({@code admission_refused})</li>
  *   <li>409 → {@link ChallengeException}</li>
  *   <li>400 → {@link InvalidEvidenceException}</li>
  *   <li>429 → {@link QuotaExceededException}</li>
@@ -20,14 +22,36 @@ public class RootHeraldApiException extends RootHeraldException {
     private static final long serialVersionUID = 1L;
 
     private final int statusCode;
+    private final String errorCode;
 
     public RootHeraldApiException(int statusCode, String message) {
+        this(statusCode, null, message);
+    }
+
+    /**
+     * @param statusCode the HTTP status
+     * @param errorCode  the server's {@code error} discriminator (e.g.
+     *                   {@code unknown_policy}, {@code policy_downgrade}), or
+     *                   {@code null} when the body carried none
+     * @param message    human-readable detail
+     */
+    public RootHeraldApiException(int statusCode, String errorCode, String message) {
         super(message);
         this.statusCode = statusCode;
+        this.errorCode = errorCode;
     }
 
     /** The HTTP status code returned by the RootHerald API. */
     public int statusCode() {
         return statusCode;
+    }
+
+    /**
+     * The machine-readable {@code error} code from the response body, or
+     * {@code null} when the server did not send one. Match on this to tell
+     * the 422 variants apart when catching the base type.
+     */
+    public String errorCode() {
+        return errorCode;
     }
 }

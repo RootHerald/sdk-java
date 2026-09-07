@@ -20,17 +20,25 @@ public final class RelayEnrollResult {
 
     private final String deviceId;
     private final EnrollActivationChallenge challenge;
+    private final String challengeId;
 
-    private RelayEnrollResult(String deviceId, EnrollActivationChallenge challenge) {
+    private RelayEnrollResult(String deviceId, EnrollActivationChallenge challenge, String challengeId) {
         this.deviceId = deviceId;
         this.challenge = challenge;
+        this.challengeId = challengeId;
     }
 
     /** An enroll carrying the MakeCredential challenge. */
     public static RelayEnrollResult fresh(String deviceId, EnrollActivationChallenge challenge) {
+        return fresh(deviceId, challenge, null);
+    }
+
+    /** An enroll carrying the MakeCredential challenge, admitted against a challenge. */
+    public static RelayEnrollResult fresh(String deviceId, EnrollActivationChallenge challenge,
+                                          String challengeId) {
         Objects.requireNonNull(deviceId, "deviceId");
         Objects.requireNonNull(challenge, "challenge");
-        return new RelayEnrollResult(deviceId, challenge);
+        return new RelayEnrollResult(deviceId, challenge, challengeId);
     }
 
     /** This tenant's alias for the device. */
@@ -41,5 +49,13 @@ public final class RelayEnrollResult {
     /** The MakeCredential challenge to relay to the client. */
     public EnrollActivationChallenge challenge() {
         return challenge;
+    }
+
+    /**
+     * The attestation challenge id this enrolment was admitted against, when
+     * the server echoed one back; {@code null} otherwise.
+     */
+    public String challengeId() {
+        return challengeId;
     }
 }

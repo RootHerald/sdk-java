@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The result of {@link RootHeraldClient#verify(String, AttestOptions)}:
@@ -21,13 +22,24 @@ import java.util.Map;
  * @param assuranceClaimsMet assurance-claim URNs the device satisfied; empty if absent, never {@code null}
  * @param enrollmentRequired {@code true} when the device is not enrolled and the caller
  *                           should drive the enroll / re-attestation flow before trusting the verdict
+ * @param key                the key the appraisal certified — present only on a passing
+ *                           verdict for a challenge that asked for {@link ChallengeOptions#ASK_KEY};
+ *                           a top-level sibling of {@code verdict} on the wire
  */
 public record AttestResult(String verdict, JsonNode verdictNode,
-                           List<String> assuranceClaimsMet, boolean enrollmentRequired) {
+                           List<String> assuranceClaimsMet, boolean enrollmentRequired,
+                           Optional<CertifiedKey> key) {
 
     public AttestResult {
         assuranceClaimsMet = assuranceClaimsMet == null
                 ? List.of() : List.copyOf(assuranceClaimsMet);
+        key = key == null ? Optional.empty() : key;
+    }
+
+    /** A result with no certified key. */
+    public AttestResult(String verdict, JsonNode verdictNode,
+                        List<String> assuranceClaimsMet, boolean enrollmentRequired) {
+        this(verdict, verdictNode, assuranceClaimsMet, enrollmentRequired, Optional.empty());
     }
 
     /** True when the verdict is {@code "allow"}. */

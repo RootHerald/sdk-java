@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
+import io.rootherald.PolicyDowngradeException;
 import io.rootherald.QuotaExceededException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.UnknownPolicyException;
@@ -17,6 +19,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -28,6 +31,7 @@ class RootHeraldClientTest {
     private HttpServer server;
     private final AtomicReference<String> lastBody = new AtomicReference<>();
     private final AtomicReference<String> lastAuth = new AtomicReference<>();
+    private final AtomicReference<String> lastQuery = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @AfterEach
@@ -39,6 +43,7 @@ class RootHeraldClientTest {
         return startWith(path, exchange -> {
             try {
                 lastAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+                lastQuery.set(exchange.getRequestURI().getRawQuery());
                 lastBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 byte[] body = responseJson.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -54,6 +59,9 @@ class RootHeraldClientTest {
 
     private RootHeraldClient startWith(String path, Consumer<HttpExchange> handler, String contextPath)
             throws IOException {
+        if (server != null) {
+            server.stop(0);
+        }
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(contextPath, handler::accept);
         server.start();
@@ -82,7 +90,167 @@ class RootHeraldClientTest {
         Challenge challenge = client.issueChallenge("device-hint");
         assertEquals("ch_1", challenge.challengeId());
         assertEquals("n_1", challenge.nonce());
+        assertNull(challenge.challenge());
         assertEquals("Bearer rh_sk_test_xxx", lastAuth.get());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals("device-hint", sent.get("deviceHint").asText());
+        assertFalse(sent.has("ask"));
+    }
+
+    // ── the challenge carries the ask ────────────────────────────────────
+
+    private static final String CHALLENGE_WITH_ASK =
+            "{\"challengeId\":\"ch_1\",\"challenge\":\"rhc1.bm9uY2U.eyJhc2siOlsia2V5Il19\","
+                    + "\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}";
+
+    @Test
+    void issueChallengeWithOptionsSendsTheAsk() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/challenge", 200, CHALLENGE_WITH_ASK);
+        Challenge challenge = client.issueChallenge(ChallengeOptions.defaults()
+                .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_KEY)
+                .policy("rootherald:builtin:strict-hardware")
+                .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN)
+                .deviceHint("hint"));
+        assertEquals("ch_1", challenge.challengeId());
+        assertEquals("rhc1.bm9uY2U.eyJhc2siOlsia2V5Il19", challenge.challenge());
+        assertEquals("n_1", challenge.nonce());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals(2, sent.get("ask").size());
+        assertEquals("identity", sent.get("ask").get(0).asText());
+        assertEquals("key", sent.get("ask").get(1).asText());
+        assertEquals("rootherald:builtin:strict-hardware", sent.get("policy").asText());
+        assertEquals("sign", sent.get("keyPurpose").asText());
+        assertEquals("hint", sent.get("deviceHint").asText());
+    }
+
+    @Test
+    void issueChallengeDefaultsOmitEveryOptionalField() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/challenge", 200, CHALLENGE_WITH_ASK);
+        client.issueChallenge(ChallengeOptions.defaults());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals(0, sent.size());
+        // An empty ask means the server default, so it is not sent either.
+        client.issueChallenge(ChallengeOptions.defaults().ask(List.of()));
+        assertEquals(0, mapper.readTree(lastBody.get()).size());
+    }
+
+    private static final String PASSING_VERDICT_WITH_KEY =
+            "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}},"
+                    + "\"assuranceClaimsMet\":[],\"enrollmentRequired\":false,"
+                    + "\"key\":{\"keyId\":\"key_1\","
+                    + "\"jwk\":{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"eHg\",\"y\":\"eXk\"},"
+                    + "\"purpose\":\"sign\",\"authPolicy\":\"cG9saWN5\","
+                    + "\"certifiedAt\":\"2030-01-01T00:01:00Z\"}}";
+
+    @Test
+    void verifyExposesTheCertifiedKeyFromTheResponseRoot() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200, PASSING_VERDICT_WITH_KEY);
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertTrue(result.isAllowed());
+        assertTrue(result.key().isPresent());
+        CertifiedKey key = result.key().get();
+        assertEquals("key_1", key.keyId());
+        assertEquals(new Jwk("EC", "P-256", "eHg", "eXk"), key.jwk());
+        assertEquals("sign", key.purpose());
+        assertEquals("cG9saWN5", key.authPolicy());
+        assertEquals(Instant.parse("2030-01-01T00:01:00Z"), key.certifiedAt());
+    }
+
+    @Test
+    void verifyKeyIsEmptyWhenAbsent() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200, PASSING_VERDICT);
+        AttestResult result = client.verify("{}", AttestOptions.of("ch_1"));
+        assertTrue(result.key().isEmpty());
+        client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}},\"key\":null}");
+        assertTrue(client.verify("{}", AttestOptions.of("ch_1")).key().isEmpty());
+    }
+
+    @Test
+    void verifyKeyAuthPolicyIsOptional() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}},"
+                        + "\"key\":{\"keyId\":\"key_1\","
+                        + "\"jwk\":{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"eHg\",\"y\":\"eXk\"},"
+                        + "\"purpose\":\"sign\",\"certifiedAt\":\"2030-01-01T00:01:00Z\"}}");
+        CertifiedKey key = client.verify("{}", AttestOptions.of("ch_1")).key().orElseThrow();
+        assertNull(key.authPolicy());
+    }
+
+    @Test
+    void verifyRejectsAMalformedKey() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}},\"key\":{\"keyId\":\"key_1\"}}");
+        assertThrows(RootHeraldApiException.class,
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
+    }
+
+    @Test
+    void maps422PolicyDowngrade() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 422,
+                "{\"error\":\"policy_downgrade\",\"message\":\"verify policy is looser than the challenge's\"}");
+        PolicyDowngradeException ex = assertThrows(PolicyDowngradeException.class,
+                () -> client.verify("{}", AttestOptions.of("ch_1").policy("loose")));
+        assertEquals("policy_downgrade", ex.errorCode());
+        assertEquals(422, ex.statusCode());
+        assertEquals("verify policy is looser than the challenge's", ex.getMessage());
+    }
+
+    @Test
+    void errorCodeRidesOnEveryTypedException() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 422,
+                "{\"error\":\"unknown_policy\"}");
+        UnknownPolicyException ex = assertThrows(UnknownPolicyException.class,
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
+        assertEquals("unknown_policy", ex.errorCode());
+        RootHeraldClient conflicting = start("/api/v1/attest/verify", 409,
+                "{\"error\":\"challenge_expired_or_used\",\"detail\":\"used\"}");
+        ChallengeException ch = assertThrows(ChallengeException.class,
+                () -> conflicting.verify("{}", AttestOptions.of("ch_1")));
+        assertEquals("challenge_expired_or_used", ch.errorCode());
+        assertEquals("used", ch.getMessage());
+    }
+
+    @Test
+    void relayEnrollWithChallengeIdSendsTheQueryParam() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/enroll", 201,
+                "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\","
+                        + "\"challengeId\":\"ch 1\"}");
+        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .platform("windows")
+                .build(), "ch 1");
+        assertEquals("challengeId=ch+1", lastQuery.get());
+        assertEquals("ch 1", result.challengeId());
+        assertEquals("dev-1", result.deviceId());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertFalse(sent.has("challengeId"));
+    }
+
+    @Test
+    void relayEnrollWithoutChallengeIdSendsNoQuery() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/enroll", 201,
+                "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
+        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .build());
+        assertNull(lastQuery.get());
+        assertNull(result.challengeId());
+    }
+
+    @Test
+    void relayEnrollMaps422AdmissionRefused() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/enroll", 422,
+                "{\"error\":\"admission_refused\",\"detail\":\"firmware TPM under a discrete-only policy\"}");
+        AdmissionRefusedException ex = assertThrows(AdmissionRefusedException.class,
+                () -> client.relayEnroll(EnrollRequestBlob.builder()
+                        .ekPublicKey("ekpub==")
+                        .akPublicArea("akpub==")
+                        .build(), "ch_1"));
+        assertEquals("admission_refused", ex.errorCode());
+        assertEquals("firmware TPM under a discrete-only policy", ex.getMessage());
     }
 
     // The REAL server wire shape (camelCase, from platform BackgroundCheckDtos):

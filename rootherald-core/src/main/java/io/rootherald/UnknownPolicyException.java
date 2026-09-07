@@ -5,6 +5,10 @@ public class UnknownPolicyException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 
     public UnknownPolicyException(String message) {
-        super(422, message);
+        this(null, message);
+    }
+
+    public UnknownPolicyException(String errorCode, String message) {
+        super(422, errorCode, message);
     }
 }
