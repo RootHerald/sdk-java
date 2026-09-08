@@ -7,8 +7,8 @@ import java.util.Objects;
  * ({@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}). Mirrors
  * {@code @rootherald/contracts}' {@code RelayEnrollResult}.
  *
- * <p>Enrolment always issues a challenge, including for a device already known —
- * re-enrolment is how a device rotates its attestation key, so short-circuiting
+ * <p>Enrollment always issues a challenge, including for a device already known —
+ * re-enrollment is how a device rotates its attestation key, so short-circuiting
  * it would make rotation impossible. Relay {@link #challenge()} to the client's
  * {@code EnrollComplete}, then call
  * {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}.
@@ -52,7 +52,7 @@ public final class RelayEnrollResult {
     }
 
     /**
-     * The attestation challenge id this enrolment was admitted against, when
+     * The attestation challenge id this enrollment was admitted against, when
      * the server echoed one back; {@code null} otherwise.
      */
     public String challengeId() {

@@ -1,7 +1,7 @@
 package io.rootherald;
 
 /**
- * Enrolment was refused because the device can never satisfy the policy bound
+ * Enrollment was refused because the device can never satisfy the policy bound
  * to the supplied challenge — for example a firmware TPM under a
  * discrete-TPM-only policy (HTTP 422, code {@code admission_refused}). The
  * server names the TPM class in the message.
