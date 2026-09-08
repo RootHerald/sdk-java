@@ -65,7 +65,7 @@ boolean ok = KeySignatures.verifyKeySignature(key.jwk(), message, signature);
 
 ### Enroll relay (one-time device-key bootstrap)
 
-The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrolment returns a MakeCredential challenge, a device already known included — re-enrolment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
+The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrollment returns a MakeCredential challenge, a device already known included — re-enrollment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
 
 ```java
 // Leg 1 — relay the client's EnrollBegin() blob. Pass a live challenge id to
