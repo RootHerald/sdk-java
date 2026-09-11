@@ -26,8 +26,7 @@ var rh = RootHeraldClient.builder()
 // 1) Mint a challenge; relay challenge.challenge() to the client verbatim.
 //    The challenge carries the ask: what the device must prove is fixed here.
 Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
-    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE)   // the default when omitted
-    .policy("rootherald:builtin:strict-hardware"));                     // optional, bound to the challenge
+    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE)); // the default when omitted
 
 // 2) The client quotes over the challenge and returns an opaque evidence blob
 //    (JSON); submit it for appraisal.
@@ -39,10 +38,14 @@ if (!result.isAllowed()) {
 }
 ```
 
-A policy named at verify time may only tighten the challenge's; a looser one is
-refused with `PolicyDowngradeException` (422 `policy_downgrade`).
+Policies bind to your API key, not to calls. The key carries an identity
+policy and, on Pro, a posture policy; a posture ask runs under the posture
+policy and everything else under the identity policy. The resolved policy is
+pinned on the challenge when it is minted. Change what a key enforces from the
+dashboard or `PUT /api/v1/admin/api-keys/{id}/policies`; a `policy` field in a
+hand-built request body is refused with `400 policy_bound_to_key`.
 
-An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` / `PolicyDowngradeException` / `AdmissionRefusedException` (422, told apart by `errorCode()`), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` / `AdmissionRefusedException` (422, told apart by `errorCode()`; `unknown_policy` means a policy bound to the key no longer exists), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
 
 ### Certified device key
 
@@ -68,9 +71,9 @@ boolean ok = KeySignatures.verifyKeySignature(key.jwk(), message, signature);
 The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrollment returns a MakeCredential challenge, a device already known included — re-enrollment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
 
 ```java
-// Leg 1 — relay the client's EnrollBegin() blob. Pass a live challenge id to
-// run admission against that challenge's policy; a device that could never
-// satisfy it is refused with AdmissionRefusedException (422 admission_refused).
+// Leg 1 — relay the client's EnrollBegin() blob. Admission runs under the
+// key's identity policy; a device that could never satisfy it is refused with
+// AdmissionRefusedException (422 admission_refused).
 RelayEnrollResult enroll = rh.relayEnroll(EnrollRequestBlob.builder()
     .ekPublicKey(blob.ekPublicKey())
     .akPublicArea(blob.akPublicArea())
