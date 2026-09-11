@@ -1,6 +1,11 @@
 package io.rootherald;
 
-/** The named policy is unknown or not owned by this tenant (HTTP 422). */
+/**
+ * A policy bound to the API key no longer exists (HTTP 422, code
+ * {@code unknown_policy}). Nothing is substituted: the call fails until the
+ * key is bound to an existing policy again, from the dashboard or
+ * {@code PUT /api/v1/admin/api-keys/{id}/policies}.
+ */
 public class UnknownPolicyException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 

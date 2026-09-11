@@ -8,7 +8,6 @@ package io.rootherald;
  * <ul>
  *   <li>401 → {@link InvalidSecretKeyException}</li>
  *   <li>422 → {@link UnknownPolicyException}, or by server code
- *       {@link PolicyDowngradeException} ({@code policy_downgrade}) /
  *       {@link AdmissionRefusedException} ({@code admission_refused})</li>
  *   <li>409 → {@link ChallengeException}</li>
  *   <li>400 → {@link InvalidEvidenceException}</li>
@@ -31,7 +30,7 @@ public class RootHeraldApiException extends RootHeraldException {
     /**
      * @param statusCode the HTTP status
      * @param errorCode  the server's {@code error} discriminator (e.g.
-     *                   {@code unknown_policy}, {@code policy_downgrade}), or
+     *                   {@code unknown_policy}, {@code admission_refused}), or
      *                   {@code null} when the body carried none
      * @param message    human-readable detail
      */

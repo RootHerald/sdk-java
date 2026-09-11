@@ -1,10 +1,10 @@
 package io.rootherald;
 
 /**
- * Enrollment was refused because the device can never satisfy the policy bound
- * to the supplied challenge — for example a firmware TPM under a
- * discrete-TPM-only policy (HTTP 422, code {@code admission_refused}). The
- * server names the TPM class in the message.
+ * Enrollment was refused because the device can never satisfy the identity
+ * policy bound to the API key (pinned on the supplied challenge) — for example
+ * a firmware TPM under a discrete-TPM-only policy (HTTP 422, code
+ * {@code admission_refused}). The server names the TPM class in the message.
  */
 public class AdmissionRefusedException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;

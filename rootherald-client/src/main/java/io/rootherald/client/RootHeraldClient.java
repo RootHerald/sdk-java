@@ -8,7 +8,6 @@ import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
-import io.rootherald.PolicyDowngradeException;
 import io.rootherald.QuotaExceededException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.RootHeraldException;
@@ -101,8 +100,11 @@ public final class RootHeraldClient {
      * {@link #verify(String, AttestOptions)} using
      * {@link Challenge#challengeId()}.
      * <p>
-     * What the device must prove is fixed here, not at verify time: a policy
-     * named on the challenge is stored with it, and verify may only tighten it.
+     * What the device must prove is fixed here, not at verify time. The policy
+     * comes from the API key, not from this call: the key carries an identity
+     * policy and, on Pro, a posture policy, and the server pins the resolved
+     * policy on the challenge at mint. A {@code policy} field in a hand-built
+     * body is refused with 400 {@code policy_bound_to_key}.
      */
     public Challenge issueChallenge(ChallengeOptions opts) {
         Objects.requireNonNull(opts, "opts");
@@ -113,9 +115,6 @@ public final class RootHeraldClient {
         if (opts.ask() != null && !opts.ask().isEmpty()) {
             ArrayNode ask = body.putArray("ask");
             opts.ask().forEach(ask::add);
-        }
-        if (opts.policy() != null) {
-            body.put("policy", opts.policy());
         }
         if (opts.keyPurpose() != null) {
             body.put("keyPurpose", opts.keyPurpose());
@@ -140,7 +139,7 @@ public final class RootHeraldClient {
      * Only protocol/auth/quota problems raise a {@link RootHeraldApiException}.
      *
      * @param evidence opaque blob (JSON string) from the client collector; passed through verbatim
-     * @param opts     attest options carrying the challenge id and optional policy
+     * @param opts     attest options carrying the challenge id
      */
     public AttestResult verify(String evidence, AttestOptions opts) {
         Objects.requireNonNull(evidence, "evidence");
@@ -153,9 +152,6 @@ public final class RootHeraldClient {
             body.set("evidence", mapper.readTree(evidence));
         } catch (IOException ex) {
             throw new RootHeraldException("evidence must be valid JSON: " + ex.getMessage(), ex);
-        }
-        if (opts.policy() != null) {
-            body.put("policy", opts.policy());
         }
         if (opts.requestedDisclosureClass() != null) {
             body.put("requestedDisclosureClass", opts.requestedDisclosureClass());
@@ -233,9 +229,9 @@ public final class RootHeraldClient {
 
     /**
      * As {@link #relayEnroll(EnrollRequestBlob)}, admitted against a live
-     * challenge: the server runs admission against the policy stored on that
-     * challenge instead of the tenant default, so a device that could never
-     * satisfy it is refused before it gets an AK
+     * challenge. Admission runs under the identity policy bound to the API
+     * key, pinned on that challenge when one is given, so a device that could
+     * never satisfy it is refused before it gets an AK
      * ({@link AdmissionRefusedException}).
      *
      * @param challengeId a challenge id from {@link #issueChallenge(ChallengeOptions)},
@@ -379,8 +375,9 @@ public final class RootHeraldClient {
     /**
      * Map a non-2xx status to the matching typed exception, mirroring
      * @rootherald/node. A 422 is split on the server's {@code error} code:
-     * {@code policy_downgrade} and {@code admission_refused} get their own
-     * types; anything else is the policy-resolution failure.
+     * {@code admission_refused} gets its own type; anything else is the
+     * policy-resolution failure, which is what a 422 meant before admission
+     * refusals existed.
      */
     private RootHeraldApiException mapError(int status, String body) {
         JsonNode tree = tryReadTree(body);
@@ -389,9 +386,6 @@ public final class RootHeraldClient {
         return switch (status) {
             case 401 -> new InvalidSecretKeyException(code, message);
             case 422 -> {
-                if (PolicyDowngradeException.ERROR_CODE.equals(code)) {
-                    yield new PolicyDowngradeException(message);
-                }
                 if (AdmissionRefusedException.ERROR_CODE.equals(code)) {
                     yield new AdmissionRefusedException(message);
                 }

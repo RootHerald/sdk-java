@@ -8,7 +8,6 @@ import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
-import io.rootherald.PolicyDowngradeException;
 import io.rootherald.QuotaExceededException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.UnknownPolicyException;
@@ -104,11 +103,10 @@ class RootHeraldClientTest {
                     + "\"nonce\":\"n_1\",\"expiresAt\":\"2030-01-01T00:00:00Z\"}";
 
     @Test
-    void issueChallengeWithOptionsSendsTheAsk() throws Exception {
+    void issueChallengeWithOptionsSendsTheAskAndNeverAPolicy() throws Exception {
         RootHeraldClient client = start("/api/v1/attest/challenge", 200, CHALLENGE_WITH_ASK);
         Challenge challenge = client.issueChallenge(ChallengeOptions.defaults()
                 .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_KEY)
-                .policy("rootherald:builtin:strict-hardware")
                 .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN)
                 .deviceHint("hint"));
         assertEquals("ch_1", challenge.challengeId());
@@ -118,7 +116,7 @@ class RootHeraldClientTest {
         assertEquals(2, sent.get("ask").size());
         assertEquals("identity", sent.get("ask").get(0).asText());
         assertEquals("key", sent.get("ask").get(1).asText());
-        assertEquals("rootherald:builtin:strict-hardware", sent.get("policy").asText());
+        assertFalse(sent.has("policy"));
         assertEquals("sign", sent.get("keyPurpose").asText());
         assertEquals("hint", sent.get("deviceHint").asText());
     }
@@ -183,17 +181,6 @@ class RootHeraldClientTest {
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}},\"key\":{\"keyId\":\"key_1\"}}");
         assertThrows(RootHeraldApiException.class,
                 () -> client.verify("{}", AttestOptions.of("ch_1")));
-    }
-
-    @Test
-    void maps422PolicyDowngrade() throws Exception {
-        RootHeraldClient client = start("/api/v1/attest/verify", 422,
-                "{\"error\":\"policy_downgrade\",\"message\":\"verify policy is looser than the challenge's\"}");
-        PolicyDowngradeException ex = assertThrows(PolicyDowngradeException.class,
-                () -> client.verify("{}", AttestOptions.of("ch_1").policy("loose")));
-        assertEquals("policy_downgrade", ex.errorCode());
-        assertEquals(422, ex.statusCode());
-        assertEquals("verify policy is looser than the challenge's", ex.getMessage());
     }
 
     @Test
@@ -277,6 +264,7 @@ class RootHeraldClientTest {
         JsonNode sent = mapper.readTree(lastBody.get());
         assertEquals("ch_1", sent.get("challengeId").asText());
         assertEquals("...", sent.get("evidence").get("quote").asText());
+        assertFalse(sent.has("policy"));
     }
 
     @Test
@@ -376,7 +364,7 @@ class RootHeraldClientTest {
         RootHeraldClient client = start("/api/v1/attest/verify", 422,
                 "{\"message\":\"no such policy\"}");
         assertThrows(UnknownPolicyException.class,
-                () -> client.verify("{}", AttestOptions.of("ch_1").policy("nope")));
+                () -> client.verify("{}", AttestOptions.of("ch_1")));
     }
 
     @Test
