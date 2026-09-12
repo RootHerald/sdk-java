@@ -3,30 +3,37 @@ package io.rootherald.client;
 /**
  * {@code EnrollComplete()} output — the body of {@code POST /api/v1/attest/activate}.
  * <p>
- * Produced by the keyless client (which decrypted the challenge inside the TPM)
- * and relayed by the backend via
- * {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}. Mirrors
- * {@code @rootherald/contracts}' {@code EnrollActivationResponse}.
+ * Produced by the keyless client and relayed by the backend via
+ * {@link RootHeraldClient#relayActivate(EnrollActivationResponse)}. A TPM
+ * carries the secret it released from the credential; a Secure Enclave carries
+ * a signature over the challenge nonce. The server decides which proof to
+ * demand from the platform recorded at enrollment, not from the body.
  *
- * @param deviceId        the {@code deviceId} from the {@link EnrollActivationChallenge} (required)
- * @param decryptedSecret base64 of the secret released by {@code TPM2_ActivateCredential}
- *                        — proof the AK is bound to the attested EK (required)
- * @param akPublicKey     optional base64 AK public area re-sent for the server's
- *                        anti key-substitution check, or {@code null}
+ * @param enrollmentId    the {@code enrollmentId} from the {@link EnrollActivationChallenge} (required)
+ * @param decryptedSecret base64 of the secret released by {@code TPM2_ActivateCredential}, or {@code null}
+ * @param signature       base64 ECDSA-P256-SHA256 signature over {@code challengeNonce}
+ *                        (DER or IEEE-P1363), or {@code null}
  */
-public record EnrollActivationResponse(String deviceId, String decryptedSecret, String akPublicKey) {
+public record EnrollActivationResponse(String enrollmentId, String decryptedSecret, String signature) {
 
     public EnrollActivationResponse {
-        if (deviceId == null || deviceId.isEmpty()) {
-            throw new IllegalArgumentException("deviceId is required");
+        if (enrollmentId == null || enrollmentId.isEmpty()) {
+            throw new IllegalArgumentException("enrollmentId is required");
         }
-        if (decryptedSecret == null || decryptedSecret.isEmpty()) {
-            throw new IllegalArgumentException("decryptedSecret is required");
+        boolean secret = decryptedSecret != null && !decryptedSecret.isEmpty();
+        boolean signed = signature != null && !signature.isEmpty();
+        if (secret == signed) {
+            throw new IllegalArgumentException("exactly one of decryptedSecret or signature is required");
         }
     }
 
-    /** Construct without the optional anti key-substitution AK public area. */
-    public EnrollActivationResponse(String deviceId, String decryptedSecret) {
-        this(deviceId, decryptedSecret, null);
+    /** A TPM's answer: the secret it released from the credential. */
+    public static EnrollActivationResponse ofDecryptedSecret(String enrollmentId, String decryptedSecret) {
+        return new EnrollActivationResponse(enrollmentId, decryptedSecret, null);
+    }
+
+    /** A Secure Enclave's answer: its signature over the challenge nonce. */
+    public static EnrollActivationResponse ofSignature(String enrollmentId, String signature) {
+        return new EnrollActivationResponse(enrollmentId, null, signature);
     }
 }

@@ -9,13 +9,15 @@ import java.util.List;
  * Produced by the customer's keyless client and relayed verbatim by the
  * customer's backend via {@link RootHeraldClient#relayEnroll(EnrollRequestBlob)}.
  * The field names are the canonical JSON keys the native client emits and the
- * RootHerald server binds; mirrors {@code @rootherald/contracts}'
- * {@code EnrollRequestBlob}.
+ * RootHerald server binds. This type covers the TPM and Secure Enclave bodies;
+ * an App Attest body has neither key and is relayed as JSON with
+ * {@link RootHeraldClient#relayEnroll(String)}.
  *
- * @param ekPublicKey         base64 platform-native EK public blob — the stable
- *                            hardware anchor the {@code deviceId} is derived from (required)
- * @param akPublicArea        base64 {@code TPM2B_PUBLIC} of the freshly-created AK (required)
- * @param platform            reporting platform, e.g. {@code "windows" | "linux" | "macos"}
+ * @param ekPublicKey         base64 platform-native EK public blob (required); on
+ *                            macOS the enclave key, X9.63 uncompressed
+ * @param akPublicArea        base64 {@code TPM2B_PUBLIC} of the freshly-created AK
+ *                            (required); on macOS the same key as {@code ekPublicKey}
+ * @param platform            reporting platform, {@code "windows" | "linux" | "macos"}
  * @param ekCertPem           PEM-encoded EK certificate, or {@code null} (firmware TPMs
  *                            may ship no NV-stored EK cert)
  * @param ekCertificateChain  PEM-encoded intermediate CA certs recovered locally, or

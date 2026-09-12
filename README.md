@@ -23,14 +23,15 @@ var rh = RootHeraldClient.builder()
     .secretKey(System.getenv("ROOTHERALD_SECRET_KEY"))
     .build();
 
-// 1) Mint a challenge; relay challenge.challenge() to the client verbatim.
-//    The challenge carries the ask: what the device must prove is fixed here.
+// 1) Mint a challenge; relay challenge.challenge() to the client verbatim and
+//    keep challenge.nonce(), your handle for it. The challenge carries the ask:
+//    what the device must prove is fixed here.
 Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
     .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE)); // the default when omitted
 
 // 2) The client quotes over the challenge and returns an opaque evidence blob
-//    (JSON); submit it for appraisal.
-AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
+//    (JSON); submit it for appraisal under the nonce it answered.
+AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.nonce()));
 
 if (!result.isAllowed()) {
     response.setStatus(403);
@@ -58,7 +59,7 @@ Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
     .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_KEY)
     .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN));
 
-AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.challengeId()));
+AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.nonce()));
 CertifiedKey key = result.key().orElseThrow();   // present only on a pass with a key ask
 store(userId, key.keyId(), key.jwk());
 
@@ -68,26 +69,25 @@ boolean ok = KeySignatures.verifyKeySignature(key.jwk(), message, signature);
 
 ### Enroll relay (one-time device-key bootstrap)
 
-The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrollment returns a MakeCredential challenge, a device already known included — re-enrollment is how a device rotates its attestation key. `deviceId()` is your tenant's alias for the device, not a global identifier.
+The keyless client also produces opaque enroll blobs; your backend relays the two legs with the same `rh_sk_` secret. Every enrollment returns a challenge, a device already known included — re-enrollment is how a device rotates its attestation key. Nothing in either leg names the device: the server finds the open enrollment by the `enrollmentId` it minted, and the `deviceId` your backend learns at activation is your tenant's alias for the device, not a global identifier. It is for your backend only; never relay it to the device.
 
 ```java
-// Leg 1 — relay the client's EnrollBegin() blob. Admission runs under the
-// key's identity policy; a device that could never satisfy it is refused with
-// AdmissionRefusedException (422 admission_refused).
-RelayEnrollResult enroll = rh.relayEnroll(EnrollRequestBlob.builder()
-    .ekPublicKey(blob.ekPublicKey())
-    .akPublicArea(blob.akPublicArea())
-    .platform("windows")
-    .ekCertPem(blob.ekCertPem())                  // optional
-    .build(), challenge.challengeId());           // challengeId optional
+// Leg 1 — relay the client's EnrollBegin() blob, as the JSON it emitted.
+// Admission runs under the key's identity policy; a device that could never
+// satisfy it is refused with AdmissionRefusedException (422 admission_refused).
+RelayEnrollResult enroll = rh.relayEnroll(enrollBeginJson);
 
-// Hand enroll.challenge() to the client's EnrollComplete(), then relay leg 2.
-EnrollActivationChallenge challenge = enroll.challenge();
-// ... client returns the decrypted secret ...
+// Hand enroll.challenge() to the client's EnrollComplete() verbatim, then relay
+// leg 2. A TPM answers with the secret it released; a Secure Enclave with a
+// signature over challengeNonce.
+EnrollActivationChallenge challenge = enroll.challenge().orElseThrow();
+// ... client returns { enrollmentId, decryptedSecret } ...
 RelayActivateResponse activated = rh.relayActivate(
-    new EnrollActivationResponse(enroll.deviceId(), decryptedSecret));
+    EnrollActivationResponse.ofDecryptedSecret(challenge.enrollmentId(), decryptedSecret));
 bindDeviceToUser(activated.deviceId());
 ```
+
+`EnrollRequestBlob.builder()` types the TPM and Secure Enclave bodies for a backend that would rather not pass JSON through. An App Attest body (`platform: "ios"`) has no EK or AK and enrolls in one leg: relay it as JSON, the 201 is empty, `enroll.challenge()` is absent and there is no activate leg.
 
 The client never holds the `rh_sk_` key and never talks to RootHerald; this backend helper is the only thing that does. The verdict is computed by RootHerald and returned to your backend; it never travels through the client.
 
