@@ -67,14 +67,14 @@ public class SampleApp {
 
         /**
          * 2) The client quoted over the challenge and posts its opaque evidence
-         * here with the challenge id; appraise it with the rh_sk_ secret key.
+         * here with the challenge nonce; appraise it with the rh_sk_ secret key.
          */
         @PostMapping("/attest")
         public ResponseEntity<Map<String, Object>> attest(@RequestBody AttestBody body) {
             if (rh == null) {
                 return notConfigured();
             }
-            AttestResult result = rh.verify(body.evidence(), AttestOptions.of(body.challengeId()));
+            AttestResult result = rh.verify(body.evidence(), AttestOptions.of(body.nonce()));
             if (!result.isAllowed()) {
                 // An un-enrolled / failing device is a verdict, not an error.
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
@@ -110,8 +110,8 @@ public class SampleApp {
         }
     }
 
-    /** {@code evidence} is the client's opaque JSON, passed through verbatim. */
-    public record AttestBody(String challengeId, String evidence) {
+    /** {@code nonce} is the handle from the challenge; {@code evidence} is the client's opaque JSON, passed through verbatim. */
+    public record AttestBody(String nonce, String evidence) {
     }
 
     /** {@code message} and {@code signature} are base64. */
