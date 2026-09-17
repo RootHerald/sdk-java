@@ -1,6 +1,10 @@
 package io.rootherald;
 
-/** The account's attestation quota or rate limit was exceeded (HTTP 429). */
+/**
+ * The tenant has exceeded its metered verify quota (HTTP 429 with code
+ * {@code quota_exceeded} or an {@code X-RootHerald-Quota} header). A 429
+ * without that signal is {@link RateLimitedException}.
+ */
 public class QuotaExceededException extends RootHeraldApiException {
     private static final long serialVersionUID = 1L;
 

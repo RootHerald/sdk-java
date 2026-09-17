@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.rootherald.ActivationRefusedException;
 import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
 import io.rootherald.QuotaExceededException;
+import io.rootherald.RateLimitedException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.RootHeraldException;
 import io.rootherald.UnknownPolicyException;
@@ -65,7 +67,20 @@ public final class RootHeraldClient {
     /** Production RootHerald API base URL. */
     public static final String DEFAULT_BASE_URL = "https://rootherald.io";
 
+    /**
+     * Per-request timeout: 30 seconds, the same in every RootHerald server SDK.
+     * Applied to every request whichever {@link HttpClient} is in use.
+     */
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+
     private static final String SECRET_KEY_PREFIX = "rh_sk_";
+
+    // Server error codes that tell apart the refusals sharing one status.
+    private static final String CODE_UNKNOWN_POLICY = "unknown_policy";
+    private static final String CODE_QUOTA_EXCEEDED = "quota_exceeded";
+
+    // Marks a 429 as the metered quota, whatever the body says.
+    private static final String QUOTA_HEADER = "X-RootHerald-Quota";
 
     private final String secretKey;
     private final URI baseUri;
@@ -76,7 +91,7 @@ public final class RootHeraldClient {
         this.secretKey = b.secretKey;
         this.baseUri = b.baseUri;
         this.http = b.httpClient != null ? b.httpClient
-                : HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+                : HttpClient.newBuilder().connectTimeout(DEFAULT_TIMEOUT).build();
     }
 
     public static Builder builder() {
@@ -124,7 +139,7 @@ public final class RootHeraldClient {
         if (opts.keyPurpose() != null) {
             body.put("keyPurpose", opts.keyPurpose());
         }
-        JsonNode data = post("/api/v1/attest/challenge", body);
+        JsonNode data = post("api/v1/attest/challenge", body);
         JsonNode nonce = data.get("nonce");
         JsonNode challenge = data.get("challenge");
         JsonNode expiresAt = data.get("expiresAt");
@@ -139,8 +154,10 @@ public final class RootHeraldClient {
      * blob for server-side appraisal and return the verdict.
      * <p>
      * An un-enrolled / failing device is NOT an error — it returns a normal
-     * {@link AttestResult} carrying a {@code "deny"}/{@code "review"} verdict.
-     * Only protocol/auth/quota problems raise a {@link RootHeraldApiException}.
+     * {@link AttestResult} carrying a {@link Verdict#FAIL}/{@link Verdict#WARN}
+     * verdict. Only protocol/auth/quota problems raise a
+     * {@link RootHeraldApiException}; a response whose verdict token is not
+     * one of the three is one too.
      *
      * @param evidence opaque blob (JSON string) from the client collector; passed through verbatim
      * @param opts     attest options carrying the challenge nonce
@@ -161,14 +178,19 @@ public final class RootHeraldClient {
             body.put("requestedDisclosureClass", opts.requestedDisclosureClass());
         }
 
-        JsonNode data = post("/api/v1/attest/verify", body);
+        JsonNode data = post("api/v1/attest/verify", body);
         JsonNode verdictNode = data.get("verdict");
         if (verdictNode == null || !verdictNode.isObject()) {
             throw new RootHeraldApiException(200, "verify response missing verdict");
         }
         // The pass/fail token lives at verdict.device.verdict (with earStatus,
         // attestationType, quoteVerified, cohort fields, …) — NOT at the top level.
-        String raw = verdictNode.path("device").path("verdict").asText(null);
+        JsonNode rawVerdict = verdictNode.path("device").path("verdict");
+        String verdict = Verdict.parse(rawVerdict.isTextual() ? rawVerdict.asText() : null);
+        if (verdict == null) {
+            throw new RootHeraldApiException(200,
+                    "verify response verdict.device.verdict is not pass/warn/fail (got " + rawVerdict + ")");
+        }
 
         // assuranceClaimsMet + enrollmentRequired are top-level siblings of
         // `verdict`, mirroring @rootherald/node — not part of the verdict node.
@@ -183,13 +205,12 @@ public final class RootHeraldClient {
         }
         boolean enrollmentRequired = data.path("enrollmentRequired").asBoolean(false);
 
-        // `key` is a top-level sibling too, present only on a passing verdict
-        // for a challenge that asked for a key.
+        // `key` is a top-level sibling too, passed through as the server sent it.
         Optional<CertifiedKey> key = data.hasNonNull("key")
                 ? Optional.of(parseCertifiedKey(data.get("key")))
                 : Optional.empty();
 
-        return new AttestResult(AttestResult.normalize(raw), verdictNode, claims, enrollmentRequired, key);
+        return new AttestResult(verdict, verdictNode, claims, enrollmentRequired, key);
     }
 
     private CertifiedKey parseCertifiedKey(JsonNode node) {
@@ -219,40 +240,53 @@ public final class RootHeraldClient {
      * Enroll relay — leg 1. POST {baseUrl}/api/v1/attest/enroll.
      * <p>
      * Relays the keyless client's {@code EnrollBegin()} blob to RootHerald with
-     * the {@code rh_sk_} secret. Returns the {@link EnrollActivationChallenge}
+     * the {@code rh_sk_} secret: every field of the record that is set is
+     * sent, and nothing else is. Returns the {@link EnrollActivationChallenge}
      * to hand to the client's {@code EnrollComplete}, whose result goes to
-     * {@link #relayActivate(EnrollActivationResponse)}. Admission runs under
-     * the identity policy bound to the API key; a device that could never
-     * satisfy it is refused before it gets an AK
+     * {@link #relayActivate(EnrollActivationResponse)}; an iOS body enrolls
+     * in this one leg and the result carries no challenge. Admission runs
+     * under the identity policy bound to the API key; a device that could
+     * never satisfy it is refused before it gets an AK
      * ({@link AdmissionRefusedException}). Other non-2xx statuses raise the
      * matching {@link RootHeraldApiException}.
      *
-     * @param blob the client's enroll request blob; relayed verbatim
+     * @param blob the client's enroll request blob
      */
     public RelayEnrollResult relayEnroll(EnrollRequestBlob blob) {
         Objects.requireNonNull(blob, "blob");
 
         ObjectNode body = mapper.createObjectNode();
-        body.put("ekPublicKey", blob.ekPublicKey());
-        body.put("akPublicArea", blob.akPublicArea());
-        if (blob.platform() != null) {
-            body.put("platform", blob.platform());
-        }
-        if (blob.ekCertPem() != null) {
-            body.put("ekCertPem", blob.ekCertPem());
-        }
+        putIfSet(body, "ekPublicKey", blob.ekPublicKey());
+        putIfSet(body, "akPublicArea", blob.akPublicArea());
+        putIfSet(body, "platform", blob.platform());
+        putIfSet(body, "ekCertPem", blob.ekCertPem());
         if (blob.ekCertificateChain() != null) {
             ArrayNode chain = body.putArray("ekCertificateChain");
             blob.ekCertificateChain().forEach(chain::add);
         }
+        if (blob.tpmSelfReport() != null) {
+            ObjectNode report = body.putObject("tpmSelfReport");
+            putIfSet(report, "manufacturer", blob.tpmSelfReport().manufacturer());
+            putIfSet(report, "vendorString", blob.tpmSelfReport().vendorString());
+        }
+        putIfSet(body, "iosKeyId", blob.iosKeyId());
+        putIfSet(body, "iosAttestationObject", blob.iosAttestationObject());
+        putIfSet(body, "nonce", blob.nonce());
         return relayEnroll(body);
     }
 
+    private static void putIfSet(ObjectNode node, String field, String value) {
+        if (value != null) {
+            node.put(field, value);
+        }
+    }
+
     /**
-     * As {@link #relayEnroll(EnrollRequestBlob)}, relaying the client's blob as
-     * the JSON object it emitted. This is the only way to relay an App Attest
-     * body ({@code platform: "ios"}), which has no EK or AK; its enrollment
-     * completes in this one leg and the result carries no challenge.
+     * As {@link #relayEnroll(EnrollRequestBlob)}, relaying the client's blob
+     * verbatim as the JSON object it emitted: the bytes the client produced
+     * are the bytes RootHerald receives, whatever fields they carry. This is
+     * the path for a backend that holds the client's JSON and has no reason to
+     * retype it.
      *
      * @param blobJson the client's enroll request blob, a JSON object
      */
@@ -271,7 +305,7 @@ public final class RootHeraldClient {
     }
 
     private RelayEnrollResult relayEnroll(ObjectNode body) {
-        JsonNode data = post("/api/v1/attest/enroll", body);
+        JsonNode data = post("api/v1/attest/enroll", body);
         if ("ios".equals(body.path("platform").asText(null)) && data.isEmpty()) {
             return RelayEnrollResult.withoutChallenge();
         }
@@ -316,7 +350,7 @@ public final class RootHeraldClient {
             body.put("signature", activation.signature());
         }
 
-        JsonNode data = post("/api/v1/attest/activate", body);
+        JsonNode data = post("api/v1/attest/activate", body);
         JsonNode deviceId = data.get("deviceId");
         if (deviceId == null || !deviceId.isTextual()) {
             throw new RootHeraldApiException(200, "activate response missing deviceId");
@@ -333,14 +367,17 @@ public final class RootHeraldClient {
     private JsonNode post(String path, JsonNode body) {
         HttpResponse<String> resp = rawPost(path, body);
         if (resp.statusCode() / 100 != 2) {
-            throw mapError(resp.statusCode(), resp.body());
+            throw mapError(resp);
         }
         return parseBody(resp);
     }
 
     /**
      * Issue an authenticated JSON POST, returning the raw response. Status
-     * interpretation is left to the caller.
+     * interpretation is left to the caller. {@code path} is relative
+     * ({@code api/v1/...}) and resolves against the base URL, whose path always
+     * ends in {@code /}, so a base of {@code https://host/prefix/} reaches
+     * {@code https://host/prefix/api/v1/...}.
      */
     private HttpResponse<String> rawPost(String path, JsonNode body) {
         URI endpoint = baseUri.resolve(path);
@@ -355,7 +392,7 @@ public final class RootHeraldClient {
                 .header("Authorization", "Bearer " + secretKey)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
-                .timeout(Duration.ofSeconds(10))
+                .timeout(DEFAULT_TIMEOUT)
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
 
@@ -392,30 +429,55 @@ public final class RootHeraldClient {
     }
 
     /**
-     * Map a non-2xx status to the matching typed exception, mirroring
-     * @rootherald/node. A 422 is split on the server's {@code error} code:
-     * {@code admission_refused} gets its own type; anything else is the
-     * policy-resolution failure, which is what a 422 meant before admission
-     * refusals existed.
+     * Map a non-2xx response to the matching typed exception, mirroring
+     * @rootherald/node. Where one status carries two refusals the server's
+     * {@code error} code (or a header) tells them apart; a code no subclass
+     * covers stays the base {@link RootHeraldApiException} with the code
+     * preserved.
      */
-    private RootHeraldApiException mapError(int status, String body) {
-        JsonNode tree = tryReadTree(body);
+    private RootHeraldApiException mapError(HttpResponse<String> resp) {
+        int status = resp.statusCode();
+        JsonNode tree = tryReadTree(resp.body());
         String code = extractErrorCode(tree);
         String message = extractMessage(tree);
-        return switch (status) {
-            case 401 -> new InvalidSecretKeyException(code, message);
+        RootHeraldApiException mapped = switch (status) {
+            case 401 -> ActivationRefusedException.ERROR_CODE.equals(code)
+                    ? new ActivationRefusedException(message)
+                    : new InvalidSecretKeyException(code, message);
             case 422 -> {
                 if (AdmissionRefusedException.ERROR_CODE.equals(code)) {
                     yield new AdmissionRefusedException(message);
                 }
-                yield new UnknownPolicyException(code, message);
+                if (code == null || CODE_UNKNOWN_POLICY.equals(code)) {
+                    yield new UnknownPolicyException(code, message);
+                }
+                yield null;
             }
             case 409 -> new ChallengeException(code, message);
             case 400 -> new InvalidEvidenceException(code, message);
-            case 429 -> new QuotaExceededException(code, message);
-            default -> new RootHeraldApiException(status, code,
-                    message != null ? message : "RootHerald API error (HTTP " + status + ")");
+            case 429 -> CODE_QUOTA_EXCEEDED.equals(code) || resp.headers().firstValue(QUOTA_HEADER).isPresent()
+                    ? new QuotaExceededException(code, message)
+                    : new RateLimitedException(code, message, retryAfterSeconds(resp, tree));
+            default -> null;
         };
+        return mapped != null ? mapped : new RootHeraldApiException(status, code,
+                message != null ? message : "RootHerald API error (HTTP " + status + ")");
+    }
+
+    /** {@code Retry-After} as whole seconds, else the body's {@code retryAfterSeconds}, else {@code null}. */
+    private static Integer retryAfterSeconds(HttpResponse<String> resp, JsonNode tree) {
+        Optional<String> header = resp.headers().firstValue("Retry-After");
+        if (header.isPresent()) {
+            try {
+                return Integer.parseInt(header.get().trim());
+            } catch (NumberFormatException ignored) {
+                // An HTTP-date Retry-After carries no usable seconds; fall through.
+            }
+        }
+        if (tree != null && tree.hasNonNull("retryAfterSeconds") && tree.get("retryAfterSeconds").isInt()) {
+            return tree.get("retryAfterSeconds").asInt();
+        }
+        return null;
     }
 
     /** The server's {@code error} discriminator ({@code code} accepted too), or {@code null}. */
@@ -447,7 +509,7 @@ public final class RootHeraldClient {
     /** Builder for {@link RootHeraldClient}. */
     public static final class Builder {
         private String secretKey;
-        private URI baseUri = URI.create(DEFAULT_BASE_URL);
+        private URI baseUri = URI.create(DEFAULT_BASE_URL + "/");
         private HttpClient httpClient;
 
         /**
@@ -467,7 +529,8 @@ public final class RootHeraldClient {
         }
 
         /**
-         * Override the production base URL. Must be an absolute https URL.
+         * Override the production base URL. Must be an absolute https URL. A
+         * path prefix is kept: requests go to {@code <baseUrl>/api/v1/...}.
          *
          * <p>The secret rides in an Authorization header on every request and is
          * full-privilege, so an {@code http://} or scheme-less base URL hands it
@@ -478,8 +541,14 @@ public final class RootHeraldClient {
          * @throws IllegalArgumentException when the URL is not absolute https or loopback
          */
         public Builder baseUrl(String baseUrl) {
-            this.baseUri = requireSecureBaseUri(baseUrl);
+            this.baseUri = withTrailingSlash(requireSecureBaseUri(baseUrl));
             return this;
+        }
+
+        /** Relative resolution replaces the last path segment, so the base must end in {@code /}. */
+        private static URI withTrailingSlash(URI uri) {
+            String text = uri.toString();
+            return text.endsWith("/") ? uri : URI.create(text + "/");
         }
 
         private static URI requireSecureBaseUri(String baseUrl) {
@@ -513,7 +582,10 @@ public final class RootHeraldClient {
             }
         }
 
-        /** Swap the underlying {@link HttpClient} (timeouts, proxies, tests). */
+        /**
+         * Swap the underlying {@link HttpClient} (connect timeout, proxies, tests).
+         * The per-request timeout stays {@link #DEFAULT_TIMEOUT}.
+         */
         public Builder httpClient(HttpClient httpClient) {
             this.httpClient = httpClient;
             return this;
