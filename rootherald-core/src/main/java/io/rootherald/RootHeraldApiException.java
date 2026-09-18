@@ -6,14 +6,22 @@ package io.rootherald;
  * statuses, mirroring the {@code @rootherald/node} taxonomy:
  *
  * <ul>
- *   <li>401 → {@link InvalidSecretKeyException}</li>
- *   <li>422 → {@link UnknownPolicyException}, or by server code
- *       {@link AdmissionRefusedException} ({@code admission_refused})</li>
+ *   <li>401 {@code activation_refused} → {@link ActivationRefusedException};
+ *       any other 401 → {@link InvalidSecretKeyException}</li>
+ *   <li>422 {@code unknown_policy} (or no code) → {@link UnknownPolicyException};
+ *       422 {@code admission_refused} → {@link AdmissionRefusedException}</li>
  *   <li>409 → {@link ChallengeException}</li>
  *   <li>400 → {@link InvalidEvidenceException}</li>
- *   <li>429 → {@link QuotaExceededException}</li>
+ *   <li>429 {@code quota_exceeded}, or an {@code X-RootHerald-Quota} header →
+ *       {@link QuotaExceededException}; any other 429 →
+ *       {@link RateLimitedException}</li>
  * </ul>
  *
+ * Where one status carries two refusals the server's error code
+ * ({@link #errorCode()}) or a header tells them apart. A status or code no
+ * subclass covers — including 422 {@code posture_not_bound} and 402
+ * {@code plan_lapsed} — is this base type with the code preserved.
+ * <p>
  * Note: an un-enrolled / failing device is NOT an error — it returns a normal
  * verdict. Only protocol/auth/quota problems raise one of these.
  */

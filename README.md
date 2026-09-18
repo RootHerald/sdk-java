@@ -33,7 +33,7 @@ Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
 //    (JSON); submit it for appraisal under the nonce it answered.
 AttestResult result = rh.verify(evidence, AttestOptions.of(challenge.nonce()));
 
-if (!result.isAllowed()) {
+if (!result.isPass()) {
     response.setStatus(403);
     return;
 }
@@ -46,7 +46,26 @@ pinned on the challenge when it is minted. Change what a key enforces from the
 dashboard or `PUT /api/v1/admin/api-keys/{id}/policies`; a `policy` field in a
 hand-built request body is refused with `400 policy_bound_to_key`.
 
-An un-enrolled / failing device is a verdict (`"deny"`/`"review"`), **not** an exception. Only protocol/auth/quota problems throw: `InvalidSecretKeyException` (401), `UnknownPolicyException` / `AdmissionRefusedException` (422, told apart by `errorCode()`; `unknown_policy` means a policy bound to the key no longer exists), `ChallengeException` (409), `InvalidEvidenceException` (400), `QuotaExceededException` (429).
+`result.verdict()` is the server's own token, `Verdict.PASS` / `Verdict.WARN` / `Verdict.FAIL` (`"pass"` / `"warn"` / `"fail"`, the same vocabulary in every Root Herald SDK), with `isPass()` as a convenience. A response carrying any other token is refused with `RootHeraldApiException`, never a guessed verdict.
+
+### Errors
+
+An un-enrolled / failing device is a verdict (`"fail"`/`"warn"`), **not** an exception. Only protocol, auth and quota problems throw, each exposing `statusCode()` and the server's `errorCode()`:
+
+| Status | Server `error` code                                 | Exception                    |
+| ------ | --------------------------------------------------- | ---------------------------- |
+| 401    | `activation_refused`                                | `ActivationRefusedException` |
+| 401    | anything else                                       | `InvalidSecretKeyException`  |
+| 400    |                                                     | `InvalidEvidenceException`   |
+| 409    |                                                     | `ChallengeException`         |
+| 422    | `unknown_policy`, or none                           | `UnknownPolicyException`     |
+| 422    | `admission_refused`                                 | `AdmissionRefusedException`  |
+| 429    | `quota_exceeded`, or an `X-RootHerald-Quota` header | `QuotaExceededException`     |
+| 429    | anything else                                       | `RateLimitedException`       |
+
+`ActivationRefusedException` is `relayActivate` being refused for an unknown, spent or foreign `enrollmentId` or a wrong proof; the secret key was accepted. `RateLimitedException.retryAfterSeconds()` is the server's `Retry-After` (else the body's `retryAfterSeconds`, else `null`); `QuotaExceededException` is the metered billing ceiling. `UnknownPolicyException` means a policy bound to the key no longer exists. Any other status, and a 422 or 402 carrying a code no subclass covers (`posture_not_bound`, `plan_lapsed`), is a plain `RootHeraldApiException` with `errorCode()` preserved. Input the SDK refuses locally, such as an empty nonce, is `IllegalArgumentException` and makes no request.
+
+Every request times out after 30 s (`RootHeraldClient.DEFAULT_TIMEOUT`), whichever `HttpClient` is in use. The default is the same in every Root Herald server SDK. A `baseUrl` with a path prefix is kept: requests go to `<baseUrl>/api/v1/...`.
 
 ### Certified device key
 
@@ -87,7 +106,7 @@ RelayActivateResponse activated = rh.relayActivate(
 bindDeviceToUser(activated.deviceId());
 ```
 
-`EnrollRequestBlob.builder()` types the TPM and Secure Enclave bodies for a backend that would rather not pass JSON through. An App Attest body (`platform: "ios"`) has no EK or AK and enrolls in one leg: relay it as JSON, the 201 is empty, `enroll.challenge()` is absent and there is no activate leg.
+`relayEnroll(String)` relays the client's JSON verbatim and is the path for a backend that already holds it. `EnrollRequestBlob.builder()` types every body for a backend that would rather not pass JSON through: `platform` is required; a TPM body carries `ekPublicKey`, `akPublicArea` and optionally `ekCertPem`, `ekCertificateChain` and `tpmSelfReport(manufacturer, vendorString)`; a macOS body the enclave key as both; an App Attest body (`platform("ios")`) `iosKeyId`, `iosAttestationObject` and `nonce`. Every field that is set is sent and nothing else is. An App Attest body enrolls in one leg: the 201 is empty, `enroll.challenge()` is absent and there is no activate leg.
 
 The client never holds the `rh_sk_` key and never talks to RootHerald; this backend helper is the only thing that does. The verdict is computed by RootHerald and returned to your backend; it never travels through the client.
 

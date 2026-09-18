@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.rootherald.ActivationRefusedException;
 import io.rootherald.AdmissionRefusedException;
 import io.rootherald.ChallengeException;
 import io.rootherald.InvalidEvidenceException;
 import io.rootherald.InvalidSecretKeyException;
 import io.rootherald.QuotaExceededException;
+import io.rootherald.RateLimitedException;
 import io.rootherald.RootHeraldApiException;
 import io.rootherald.RootHeraldException;
 import io.rootherald.UnknownPolicyException;
@@ -32,6 +34,7 @@ class RootHeraldClientTest {
     private final AtomicReference<String> lastBody = new AtomicReference<>();
     private final AtomicReference<String> lastAuth = new AtomicReference<>();
     private final AtomicReference<String> lastQuery = new AtomicReference<>();
+    private final AtomicReference<String> lastPath = new AtomicReference<>();
     private final ObjectMapper mapper = new ObjectMapper();
 
     @AfterEach
@@ -39,14 +42,19 @@ class RootHeraldClientTest {
         if (server != null) server.stop(0);
     }
 
-    private RootHeraldClient start(String path, int status, String responseJson) throws IOException {
+    private RootHeraldClient start(String path, int status, String responseJson, String... headers)
+            throws IOException {
         return startWith(path, exchange -> {
             try {
                 lastAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 lastQuery.set(exchange.getRequestURI().getRawQuery());
+                lastPath.set(exchange.getRequestURI().getRawPath());
                 lastBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 byte[] body = responseJson.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
+                for (int i = 0; i + 1 < headers.length; i += 2) {
+                    exchange.getResponseHeaders().add(headers[i], headers[i + 1]);
+                }
                 exchange.sendResponseHeaders(status, body.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(body);
@@ -154,7 +162,7 @@ class RootHeraldClientTest {
     void verifyExposesTheCertifiedKeyFromTheResponseRoot() throws Exception {
         RootHeraldClient client = start("/api/v1/attest/verify", 200, PASSING_VERDICT_WITH_KEY);
         AttestResult result = client.verify("{}", AttestOptions.of("n_1"));
-        assertTrue(result.isAllowed());
+        assertTrue(result.isPass());
         assertTrue(result.key().isPresent());
         CertifiedKey key = result.key().get();
         assertEquals("key_1", key.keyId());
@@ -217,8 +225,54 @@ class RootHeraldClientTest {
         client.relayEnroll(EnrollRequestBlob.builder()
                 .ekPublicKey("ekpub==")
                 .akPublicArea("akpub==")
+                .platform("windows")
                 .build());
         assertNull(lastQuery.get());
+    }
+
+    @Test
+    void typedEnrollBlobCarriesEverythingSetAndNothingElse() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/enroll", 201, TPM_ENROLL_201);
+        client.relayEnroll(EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==")
+                .akPublicArea("akpub==")
+                .platform("linux")
+                .tpmSelfReport("IFX", "SLB9670")
+                .build());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals("IFX", sent.get("tpmSelfReport").get("manufacturer").asText());
+        assertEquals("SLB9670", sent.get("tpmSelfReport").get("vendorString").asText());
+        assertEquals(4, sent.size());
+        assertFalse(sent.has("ekCertPem"));
+        assertFalse(sent.has("iosKeyId"));
+    }
+
+    @Test
+    void typedEnrollBlobBuildsAnAppAttestBody() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/enroll", 201, "{}");
+        RelayEnrollResult result = client.relayEnroll(EnrollRequestBlob.builder()
+                .platform("ios")
+                .iosKeyId("k==")
+                .iosAttestationObject("att==")
+                .nonce("bm9uY2U")
+                .build());
+        assertTrue(result.challenge().isEmpty());
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals(4, sent.size());
+        assertEquals("ios", sent.get("platform").asText());
+        assertEquals("k==", sent.get("iosKeyId").asText());
+        assertEquals("att==", sent.get("iosAttestationObject").asText());
+        assertEquals("bm9uY2U", sent.get("nonce").asText());
+    }
+
+    @Test
+    void typedEnrollBlobRequiresThePlatformAndItsFields() {
+        assertThrows(IllegalArgumentException.class, () -> EnrollRequestBlob.builder()
+                .ekPublicKey("ekpub==").akPublicArea("akpub==").build());
+        assertThrows(IllegalArgumentException.class, () -> EnrollRequestBlob.builder()
+                .platform("ios").iosKeyId("k==").iosAttestationObject("att==").build());
+        assertThrows(IllegalArgumentException.class, () -> EnrollRequestBlob.builder()
+                .platform("windows").ekPublicKey("ekpub==").build());
     }
 
     @Test
@@ -276,13 +330,13 @@ class RootHeraldClientTest {
                 "{\"deviceId\":\"dev-1\",\"credentialBlob\":\"cb==\",\"encryptedSecret\":\"es==\"}");
         RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
                 () -> client.relayEnroll(EnrollRequestBlob.builder()
-                        .ekPublicKey("ekpub==").akPublicArea("akpub==").build()));
+                        .ekPublicKey("ekpub==").akPublicArea("akpub==").platform("windows").build()));
         assertTrue(ex.getMessage().contains("enrollmentId"));
         RootHeraldClient halfTpm = start("/api/v1/attest/enroll", 201,
                 "{\"enrollmentId\":\"enr-1\",\"credentialBlob\":\"cb==\"}");
         assertThrows(RootHeraldApiException.class,
                 () -> halfTpm.relayEnroll(EnrollRequestBlob.builder()
-                        .ekPublicKey("ekpub==").akPublicArea("akpub==").build()));
+                        .ekPublicKey("ekpub==").akPublicArea("akpub==").platform("windows").build()));
     }
 
     @Test
@@ -300,6 +354,7 @@ class RootHeraldClientTest {
                 () -> client.relayEnroll(EnrollRequestBlob.builder()
                         .ekPublicKey("ekpub==")
                         .akPublicArea("akpub==")
+                        .platform("windows")
                         .build()));
         assertEquals("admission_refused", ex.errorCode());
         assertEquals("firmware TPM under a discrete-only policy", ex.getMessage());
@@ -323,9 +378,9 @@ class RootHeraldClientTest {
         RootHeraldClient client = start("/api/v1/attest/verify", 200, PASSING_VERDICT);
         AttestResult result = client.verify("{\"quote\":\"...\"}",
                 AttestOptions.of("n_1"));
-        // A genuinely PASSING device (token at verdict.device.verdict) maps to allow.
-        assertEquals("allow", result.verdict());
-        assertTrue(result.isAllowed());
+        // A genuinely PASSING device (token at verdict.device.verdict) is a pass.
+        assertEquals(Verdict.PASS, result.verdict());
+        assertTrue(result.isPass());
         JsonNode sent = mapper.readTree(lastBody.get());
         assertEquals("n_1", sent.get("nonce").asText());
         assertFalse(sent.has("challengeId"));
@@ -356,7 +411,7 @@ class RootHeraldClientTest {
         AttestResult result = client.verify("{}", AttestOptions.of("n_1"));
         assertTrue(result.enrollmentRequired());
         assertTrue(result.assuranceClaimsMet().isEmpty());
-        assertEquals("deny", result.verdict());
+        assertEquals(Verdict.FAIL, result.verdict());
     }
 
     @Test
@@ -420,7 +475,72 @@ class RootHeraldClientTest {
         RootHeraldClient client = start("/api/v1/attest/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}}}");
         AttestResult result = client.verify("{}", AttestOptions.of("n_1"));
-        assertEquals("deny", result.verdict());
+        assertEquals(Verdict.FAIL, result.verdict());
+        assertFalse(result.isPass());
+    }
+
+    @Test
+    void warnVerdictIsTheServersToken() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"warn\"}}}");
+        assertEquals(Verdict.WARN, client.verify("{}", AttestOptions.of("n_1")).verdict());
+    }
+
+    @Test
+    void aVerdictTokenOutsidePassWarnFailIsRefused() throws Exception {
+        for (String token : new String[] {"\"allow\"", "\"review\"", "\"\"", "null", "7"}) {
+            RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                    "{\"verdict\":{\"device\":{\"verdict\":" + token + "}}}");
+            RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
+                    () -> client.verify("{}", AttestOptions.of("n_1")), token);
+            assertTrue(ex.getMessage().contains("verdict.device.verdict"));
+        }
+    }
+
+    @Test
+    void aKeyBesideANonPassingVerdictIsPassedThrough() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"fail\"}},"
+                        + "\"key\":{\"keyId\":\"key_1\","
+                        + "\"jwk\":{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"eHg\",\"y\":\"eXk\"},"
+                        + "\"purpose\":\"sign\",\"certifiedAt\":\"2030-01-01T00:01:00Z\"}}");
+        AttestResult result = client.verify("{}", AttestOptions.of("n_1"));
+        assertEquals(Verdict.FAIL, result.verdict());
+        assertEquals("key_1", result.key().orElseThrow().keyId());
+    }
+
+    @Test
+    void aPathPrefixOnTheBaseUrlIsKept() throws Exception {
+        RootHeraldClient client = startWith("/prefix/api/v1/attest/verify", exchange -> {
+            try {
+                lastPath.set(exchange.getRequestURI().getRawPath());
+                byte[] body = "{\"verdict\":{\"device\":{\"verdict\":\"pass\"}}}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, body.length);
+                try (OutputStream out = exchange.getResponseBody()) {
+                    out.write(body);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }, "/prefix/");
+        RootHeraldClient prefixed = RootHeraldClient.builder()
+                .secretKey("rh_sk_test_xxx")
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/prefix")
+                .build();
+        prefixed.verify("{}", AttestOptions.of("n_1"));
+        assertEquals("/prefix/api/v1/attest/verify", lastPath.get());
+        RootHeraldClient slashed = RootHeraldClient.builder()
+                .secretKey("rh_sk_test_xxx")
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/prefix/")
+                .build();
+        slashed.verify("{}", AttestOptions.of("n_1"));
+        assertEquals("/prefix/api/v1/attest/verify", lastPath.get());
+        assertNotNull(client);
+    }
+
+    @Test
+    void theRequestTimeoutIsThirtySeconds() {
+        assertEquals(java.time.Duration.ofSeconds(30), RootHeraldClient.DEFAULT_TIMEOUT);
     }
 
     @Test
@@ -429,6 +549,20 @@ class RootHeraldClientTest {
                 "{\"error\":\"x\",\"message\":\"boom\"}");
         assertThrows(InvalidSecretKeyException.class,
                 () -> client.verify("{}", AttestOptions.of("n_1")));
+        RootHeraldClient bare = start("/api/v1/attest/verify", 401, "");
+        assertThrows(InvalidSecretKeyException.class,
+                () -> bare.verify("{}", AttestOptions.of("n_1")));
+    }
+
+    @Test
+    void maps401ActivationRefusedToItsOwnType() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 401,
+                "{\"error\":\"activation_refused\",\"message\":\"Invalid credential activation response\"}");
+        ActivationRefusedException ex = assertThrows(ActivationRefusedException.class,
+                () -> client.verify("{}", AttestOptions.of("n_1")));
+        assertEquals("activation_refused", ex.errorCode());
+        assertEquals("Invalid credential activation response", ex.getMessage());
+        assertEquals(401, ex.statusCode());
     }
 
     @Test
@@ -437,6 +571,28 @@ class RootHeraldClientTest {
                 "{\"message\":\"no such policy\"}");
         assertThrows(UnknownPolicyException.class,
                 () -> client.verify("{}", AttestOptions.of("n_1")));
+    }
+
+    @Test
+    void a422WithACodeNoTypeCoversStaysGenericWithTheCode() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/challenge", 422,
+                "{\"error\":\"posture_not_bound\",\"message\":\"no posture policy\"}");
+        RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
+                () -> client.issueChallenge());
+        assertFalse(ex instanceof UnknownPolicyException);
+        assertEquals(422, ex.statusCode());
+        assertEquals("posture_not_bound", ex.errorCode());
+        assertEquals("no posture policy", ex.getMessage());
+    }
+
+    @Test
+    void a402PlanLapsedStaysGenericWithTheCode() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/challenge", 402,
+                "{\"error\":\"plan_lapsed\",\"message\":\"plan lapsed\"}");
+        RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
+                () -> client.issueChallenge());
+        assertEquals(402, ex.statusCode());
+        assertEquals("plan_lapsed", ex.errorCode());
     }
 
     @Test
@@ -454,10 +610,35 @@ class RootHeraldClientTest {
     }
 
     @Test
-    void maps429ToQuotaExceeded() throws Exception {
-        RootHeraldClient client = start("/api/v1/attest/verify", 429, "{}");
+    void maps429QuotaExceededByCodeOrHeader() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 429,
+                "{\"error\":\"quota_exceeded\",\"message\":\"ceiling\"}");
         assertThrows(QuotaExceededException.class,
                 () -> client.verify("{}", AttestOptions.of("n_1")));
+        RootHeraldClient byHeader = start("/api/v1/attest/verify", 429, "{}",
+                "X-RootHerald-Quota", "device-limit-exceeded");
+        assertThrows(QuotaExceededException.class,
+                () -> byHeader.verify("{}", AttestOptions.of("n_1")));
+    }
+
+    @Test
+    void maps429WithoutAQuotaSignalToRateLimited() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 429,
+                "{\"error\":\"rate_limited\",\"message\":\"Too many requests\",\"retryAfterSeconds\":60}",
+                "Retry-After", "17");
+        RateLimitedException ex = assertThrows(RateLimitedException.class,
+                () -> client.verify("{}", AttestOptions.of("n_1")));
+        assertEquals(17, ex.retryAfterSeconds());
+        assertEquals("rate_limited", ex.errorCode());
+
+        RootHeraldClient fromBody = start("/api/v1/attest/verify", 429,
+                "{\"error\":\"rate_limited\",\"retryAfterSeconds\":60}");
+        assertEquals(60, assertThrows(RateLimitedException.class,
+                () -> fromBody.verify("{}", AttestOptions.of("n_1"))).retryAfterSeconds());
+
+        RootHeraldClient bare = start("/api/v1/attest/verify", 429, "");
+        assertNull(assertThrows(RateLimitedException.class,
+                () -> bare.verify("{}", AttestOptions.of("n_1"))).retryAfterSeconds());
     }
 
     // ── ABI backend-relay contract ────────────────────────────────────────
@@ -475,7 +656,7 @@ class RootHeraldClientTest {
         RootHeraldClient client = start("/api/v1/attest/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
         AttestResult result = client.verify("{}", AttestOptions.of("n_1"));
-        assertTrue(result.isAllowed());
+        assertTrue(result.isPass());
     }
 
     @Test
@@ -558,10 +739,14 @@ class RootHeraldClientTest {
     }
 
     @Test
-    void relayActivateMaps401ForAnUnknownEnrollmentOrWrongProof() throws Exception {
+    void relayActivateMapsARefusalToActivationRefusedNotInvalidKey() throws Exception {
         RootHeraldClient client = start("/api/v1/attest/activate", 401,
-                "{\"error\":\"Invalid credential activation response\"}");
-        assertThrows(InvalidSecretKeyException.class, () -> client.relayActivate(
+                "{\"error\":\"activation_refused\",\"message\":\"Invalid credential activation response\"}");
+        assertThrows(ActivationRefusedException.class, () -> client.relayActivate(
+                EnrollActivationResponse.ofDecryptedSecret("enr-9", "secret==")));
+        RootHeraldClient badKey = start("/api/v1/attest/activate", 401,
+                "{\"error\":\"invalid_secret_key\"}");
+        assertThrows(InvalidSecretKeyException.class, () -> badKey.relayActivate(
                 EnrollActivationResponse.ofDecryptedSecret("enr-9", "secret==")));
     }
 

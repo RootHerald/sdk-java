@@ -4,6 +4,30 @@
 
 ### Breaking
 
+- `AttestResult.verdict()` is the server's own token, `Verdict.PASS` /
+  `Verdict.WARN` / `Verdict.FAIL` (`"pass"` / `"warn"` / `"fail"`), the same
+  vocabulary as every other RootHerald SDK; `"allow"` / `"deny"` / `"review"`
+  are gone and `isAllowed()` is `isPass()`. A response carrying any other
+  token throws `RootHeraldApiException` instead of reading as `"review"`.
+- `EnrollRequestBlob` requires `platform` and carries `tpmSelfReport`,
+  `iosKeyId`, `iosAttestationObject` and `nonce`; `relayEnroll(EnrollRequestBlob)`
+  sends every field that is set and nothing else, so a swtpm's self-report
+  and an App Attest body relay through the typed helper. The five-argument
+  constructor remains for TPM and macOS bodies.
+- A 401 carrying `activation_refused` is `ActivationRefusedException`, not
+  `InvalidSecretKeyException`. A 429 without `quota_exceeded` or an
+  `X-RootHerald-Quota` header is `RateLimitedException`, with
+  `retryAfterSeconds()`, not `QuotaExceededException`. A 422 whose code is
+  neither `unknown_policy` nor `admission_refused` (`posture_not_bound`) is
+  a plain `RootHeraldApiException` with the code preserved.
+- Requests resolve `api/v1/...` against the base URL with its path kept, so
+  `baseUrl("https://host/prefix")` reaches `https://host/prefix/api/v1/...`
+  instead of `https://host/api/v1/...`.
+- The per-request timeout is 30 s (`RootHeraldClient.DEFAULT_TIMEOUT`), was
+  10 s.
+- `CertifiedKey.authPolicy()` is documented as hex, which is what the server
+  sends.
+
 - Wire 7.0: nothing a client sends locates a row. `Challenge` is
   `(nonce, challenge, expiresAt)`; there is no `challengeId`. The `nonce` is
   the backend's handle for the challenge and `AttestOptions.of(nonce)` carries

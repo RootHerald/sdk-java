@@ -17,14 +17,16 @@ import java.util.Optional;
  * {@code assuranceClaimsMet} and drive the enroll-on-miss flow on
  * {@code enrollmentRequired}.
  *
- * @param verdict            normalised verdict: {@code "allow"}, {@code "deny"}, or {@code "review"}
+ * @param verdict            the server's verdict token, {@link Verdict#PASS}, {@link Verdict#WARN}
+ *                           or {@link Verdict#FAIL}; a response carrying any other token is refused
  * @param verdictNode        the full verdict object returned by the server
  * @param assuranceClaimsMet assurance-claim URNs the device satisfied; empty if absent, never {@code null}
  * @param enrollmentRequired {@code true} when the device is not enrolled and the caller
  *                           should drive the enroll / re-attestation flow before trusting the verdict
- * @param key                the key the appraisal certified — present only on a passing
- *                           verdict for a challenge that asked for {@link ChallengeOptions#ASK_KEY};
- *                           a top-level sibling of {@code verdict} on the wire
+ * @param key                the key the appraisal certified, passed through as the server sent
+ *                           it; the server sends one only on a passing verdict for a challenge
+ *                           that asked for {@link ChallengeOptions#ASK_KEY}. A top-level sibling
+ *                           of {@code verdict} on the wire
  */
 public record AttestResult(String verdict, JsonNode verdictNode,
                            List<String> assuranceClaimsMet, boolean enrollmentRequired,
@@ -42,9 +44,9 @@ public record AttestResult(String verdict, JsonNode verdictNode,
         this(verdict, verdictNode, assuranceClaimsMet, enrollmentRequired, Optional.empty());
     }
 
-    /** True when the verdict is {@code "allow"}. */
-    public boolean isAllowed() {
-        return "allow".equalsIgnoreCase(verdict);
+    /** True when the verdict is {@link Verdict#PASS}. */
+    public boolean isPass() {
+        return Verdict.PASS.equals(verdict);
     }
 
     /**
@@ -108,21 +110,5 @@ public record AttestResult(String verdict, JsonNode verdictNode,
     public Boolean novelProfile() {
         JsonNode d = device();
         return d != null && d.hasNonNull("novelProfile") ? d.get("novelProfile").asBoolean() : null;
-    }
-
-    /**
-     * Map the flat "verdict" the server emits ("pass"/"fail"/"warn") to the
-     * normalised SDK vocabulary. Unknown/missing values map to {@code "review"}
-     * (fail-closed: never silently {@code "allow"}).
-     */
-    static String normalize(String raw) {
-        if (raw == null) {
-            return "review";
-        }
-        return switch (raw.trim().toLowerCase()) {
-            case "pass", "allow", "affirming" -> "allow";
-            case "fail", "deny", "contraindicated" -> "deny";
-            default -> "review";
-        };
     }
 }

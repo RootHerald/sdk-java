@@ -75,7 +75,7 @@ public class SampleApp {
                 return notConfigured();
             }
             AttestResult result = rh.verify(body.evidence(), AttestOptions.of(body.nonce()));
-            if (!result.isAllowed()) {
+            if (!result.isPass()) {
                 // An un-enrolled / failing device is a verdict, not an error.
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("ok", false, "verdict", result.verdict(),
