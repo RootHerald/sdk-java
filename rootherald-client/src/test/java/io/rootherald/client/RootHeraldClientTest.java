@@ -424,6 +424,36 @@ class RootHeraldClientTest {
     }
 
     @Test
+    void anInvalidPurposeIsAProgrammingErrorNotADeviceFailure() throws Exception {
+        RootHeraldClient client = start("/api/v1/keys/challenge", 400,
+                "{\"error\":\"invalid_purpose\",\"message\":\"purpose must be one of sign, decrypt\"}");
+        RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
+                () -> client.issueKeyChallenge(KeyChallengeOptions.of("sign")));
+        assertTrue(ex instanceof InvalidAskException);
+        assertFalse(ex instanceof InvalidEvidenceException);
+        assertEquals("invalid_purpose", ex.errorCode());
+    }
+
+    @Test
+    void certifyRefusalsKeepTheirCodes() throws Exception {
+        RootHeraldClient malformed = start("/api/v1/keys/certify", 400,
+                "{\"error\":\"invalid_certification\",\"message\":\"attest is not a TPMS_ATTEST\"}");
+        RootHeraldApiException bad = assertThrows(InvalidEvidenceException.class,
+                () -> malformed.certifyKey("k_1", TPM_CERTIFICATION));
+        assertEquals("invalid_certification", bad.errorCode());
+        for (String code : List.of("certification_rejected", "key_disclosure_too_low",
+                "expected_unknown", "purpose_unsupported")) {
+            RootHeraldClient refused = start("/api/v1/keys/certify", 422,
+                    "{\"error\":\"" + code + "\",\"message\":\"refused\"}");
+            RootHeraldApiException ex = assertThrows(RootHeraldApiException.class,
+                    () -> refused.certifyKey("k_1", TPM_CERTIFICATION));
+            assertEquals(RootHeraldApiException.class, ex.getClass());
+            assertEquals(422, ex.statusCode());
+            assertEquals(code, ex.errorCode());
+        }
+    }
+
+    @Test
     void aKeyRotationConflictStaysGenericWithTheCode() throws Exception {
         RootHeraldClient client = start("/api/v1/keys/certify", 409,
                 "{\"error\":\"key_rotation_conflict\",\"message\":\"rotating\"}");

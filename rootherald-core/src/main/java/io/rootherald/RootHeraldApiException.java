@@ -11,8 +11,8 @@ package io.rootherald;
  *   <li>422 {@code unknown_policy} (or no code) → {@link UnknownPolicyException};
  *       422 {@code admission_refused} → {@link AdmissionRefusedException}</li>
  *   <li>409 → {@link ChallengeException}, except {@code key_rotation_conflict}</li>
- *   <li>400 {@code invalid_ask} → {@link InvalidAskException};
- *       any other 400 → {@link InvalidEvidenceException}</li>
+ *   <li>400 {@code invalid_ask} or {@code invalid_purpose} → {@link InvalidAskException};
+ *       any other 400, including {@code invalid_certification} → {@link InvalidEvidenceException}</li>
  *   <li>429 {@code budget_exhausted}, or an {@code X-RootHerald-Quota} header →
  *       {@link QuotaExceededException}; any other 429 →
  *       {@link RateLimitedException}</li>
@@ -20,8 +20,9 @@ package io.rootherald;
  *
  * Where one status carries two refusals the server's error code
  * ({@link #errorCode()}) or a header tells them apart. A status or code no
- * subclass covers — 422 {@code expected_unknown}, {@code key_disclosure_too_low}
- * and {@code posture_not_bound}, 409 {@code key_rotation_conflict}, 402
+ * subclass covers — 422 {@code expected_unknown}, {@code key_disclosure_too_low},
+ * {@code purpose_unsupported}, {@code certification_rejected} and
+ * {@code posture_not_bound}, 409 {@code key_rotation_conflict}, 402
  * {@code plan_lapsed} — is this base type with the code preserved.
  * <p>
  * A 200 whose body the SDK refuses is one too: a verdict token outside

@@ -695,7 +695,8 @@ public final class RootHeraldClient {
             }
             case 409 -> CODE_KEY_ROTATION_CONFLICT.equals(code) ? null : new ChallengeException(code, message);
             case 400 -> InvalidAskException.ERROR_CODE.equals(code)
-                    ? new InvalidAskException(message)
+                    || InvalidAskException.PURPOSE_ERROR_CODE.equals(code)
+                    ? new InvalidAskException(code, message)
                     : new InvalidEvidenceException(code, message);
             case 429 -> QuotaExceededException.ERROR_CODE.equals(code)
                     || resp.headers().firstValue(QUOTA_HEADER).isPresent()

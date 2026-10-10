@@ -40,7 +40,10 @@ reverse; the server refuses a 7.0-shaped enroll body with
 - A 429 `budget_exhausted` is `QuotaExceededException` with `budget()`
   (`RefusingBudget(id, name)`); the `quota_exceeded` code is gone. A 409
   `key_rotation_conflict` is a plain `RootHeraldApiException`, not
-  `ChallengeException`.
+  `ChallengeException`. A 400 `invalid_purpose` is `InvalidAskException`
+  (`errorCode()` preserved); a 400 `invalid_certification` is
+  `InvalidEvidenceException`; a 422 `purpose_unsupported` or
+  `certification_rejected` is a plain `RootHeraldApiException`.
 
 ### Added
 
