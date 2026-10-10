@@ -16,20 +16,24 @@ import java.util.List;
  * <p>
  * Which fields a platform requires:
  * <ul>
- *   <li>{@code "windows"} / {@code "linux"}: {@code ekPublicKey} and
- *       {@code akPublicArea}; optionally {@code ekCertPem},
- *       {@code ekCertificateChain} and {@code tpmSelfReport}</li>
+ *   <li>{@code "windows"} / {@code "linux"}: {@code ekPublicKey} and the nested
+ *       {@code attestationKey}; optionally {@code ekCertPem},
+ *       {@code ekCertificateChain} and {@code tpmSelfReport}. The nested object
+ *       is what tells an 8.0 body from a 7.0 one; a flat {@code akPublicArea}
+ *       on a TPM body is refused here, before any request</li>
  *   <li>{@code "macos"}: {@code ekPublicKey} and {@code akPublicArea}, both the
- *       Secure Enclave key (X9.63 uncompressed, base64)</li>
+ *       Secure Enclave key (X9.63 uncompressed, base64); the body stays flat
+ *       because there is no parent</li>
  *   <li>{@code "ios"}: {@code iosKeyId}, {@code iosAttestationObject} and
  *       {@code nonce}; the enrollment completes in this one leg</li>
  * </ul>
  *
- * @param ekPublicKey          base64 platform-native EK public blob; on macOS the
- *                             enclave key. Required on a TPM or macOS body
- * @param akPublicArea         base64 {@code TPM2B_PUBLIC} of the freshly-created AK;
- *                             on macOS the same key as {@code ekPublicKey}. Required
- *                             on a TPM or macOS body
+ * @param ekPublicKey          base64 {@code TPM2B_PUBLIC} of the endorsement key; on macOS
+ *                             the enclave key. Required on a TPM or macOS body
+ * @param attestationKey       this installation's attestation key and its parent.
+ *                             Required on a TPM body; absent otherwise
+ * @param akPublicArea         on macOS, the same key as {@code ekPublicKey}. Required on
+ *                             a macOS body; absent otherwise
  * @param platform             reporting platform, {@code "windows" | "linux" | "macos" | "ios"}.
  *                             Required
  * @param ekCertPem            PEM-encoded EK certificate, or {@code null} (firmware TPMs
@@ -45,6 +49,7 @@ import java.util.List;
  */
 public record EnrollRequestBlob(
         String ekPublicKey,
+        AttestationKey attestationKey,
         String akPublicArea,
         String platform,
         String ekCertPem,
@@ -54,6 +59,9 @@ public record EnrollRequestBlob(
         String iosAttestationObject,
         String nonce) {
 
+    public static final String PLATFORM_WINDOWS = "windows";
+    public static final String PLATFORM_LINUX = "linux";
+    public static final String PLATFORM_MACOS = "macos";
     /** The App Attest platform, the one body with no EK or AK. */
     public static final String PLATFORM_IOS = "ios";
 
@@ -61,26 +69,44 @@ public record EnrollRequestBlob(
         if (platform == null || platform.isEmpty()) {
             throw new IllegalArgumentException("platform is required");
         }
-        if (PLATFORM_IOS.equals(platform)) {
-            requireText(iosKeyId, "iosKeyId");
-            requireText(iosAttestationObject, "iosAttestationObject");
-            requireText(nonce, "nonce");
-        } else {
-            requireText(ekPublicKey, "ekPublicKey");
-            requireText(akPublicArea, "akPublicArea");
+        switch (platform) {
+            case PLATFORM_WINDOWS, PLATFORM_LINUX -> {
+                requireText(ekPublicKey, "ekPublicKey");
+                if (attestationKey == null) {
+                    throw new IllegalArgumentException(
+                            "attestationKey { publicArea, parentPublicArea, qualifiedName } is required on a "
+                                    + platform + " body");
+                }
+                requireAbsent(akPublicArea, "akPublicArea", platform);
+            }
+            case PLATFORM_MACOS -> {
+                requireText(ekPublicKey, "ekPublicKey");
+                requireText(akPublicArea, "akPublicArea");
+                if (attestationKey != null) {
+                    throw new IllegalArgumentException("attestationKey is not part of a macos body");
+                }
+            }
+            case PLATFORM_IOS -> {
+                requireText(iosKeyId, "iosKeyId");
+                requireText(iosAttestationObject, "iosAttestationObject");
+                requireText(nonce, "nonce");
+            }
+            default -> throw new IllegalArgumentException(
+                    "platform must be windows, linux, macos or ios (got " + platform + ")");
         }
         ekCertificateChain = ekCertificateChain == null ? null : List.copyOf(ekCertificateChain);
-    }
-
-    /** A TPM or Secure Enclave body: the fields of the pre-iOS record. */
-    public EnrollRequestBlob(String ekPublicKey, String akPublicArea, String platform,
-                             String ekCertPem, List<String> ekCertificateChain) {
-        this(ekPublicKey, akPublicArea, platform, ekCertPem, ekCertificateChain, null, null, null, null);
     }
 
     private static void requireText(String value, String field) {
         if (value == null || value.isEmpty()) {
             throw new IllegalArgumentException(field + " is required");
+        }
+    }
+
+    private static void requireAbsent(String value, String field, String platform) {
+        if (value != null) {
+            throw new IllegalArgumentException(field + " is the 7.0 shape; a " + platform
+                    + " body carries attestationKey { publicArea, parentPublicArea, qualifiedName }");
         }
     }
 
@@ -91,6 +117,7 @@ public record EnrollRequestBlob(
     /** Builder for {@link EnrollRequestBlob}; every optional field defaults to absent. */
     public static final class Builder {
         private String ekPublicKey;
+        private AttestationKey attestationKey;
         private String akPublicArea;
         private String platform;
         private String ekCertPem;
@@ -100,13 +127,24 @@ public record EnrollRequestBlob(
         private String iosAttestationObject;
         private String nonce;
 
-        /** base64 platform-native EK public blob (TPM and macOS). */
+        /** base64 EK public area (TPM), or the enclave key (macOS). */
         public Builder ekPublicKey(String ekPublicKey) {
             this.ekPublicKey = ekPublicKey;
             return this;
         }
 
-        /** base64 {@code TPM2B_PUBLIC} of the AK (TPM and macOS). */
+        /** This installation's attestation key and its parent (TPM). */
+        public Builder attestationKey(AttestationKey attestationKey) {
+            this.attestationKey = attestationKey;
+            return this;
+        }
+
+        /** This installation's attestation key and its parent (TPM). */
+        public Builder attestationKey(String publicArea, String parentPublicArea, String qualifiedName) {
+            return attestationKey(new AttestationKey(publicArea, parentPublicArea, qualifiedName));
+        }
+
+        /** The enclave key again (macOS only). */
         public Builder akPublicArea(String akPublicArea) {
             this.akPublicArea = akPublicArea;
             return this;
@@ -169,8 +207,8 @@ public record EnrollRequestBlob(
         }
 
         public EnrollRequestBlob build() {
-            return new EnrollRequestBlob(ekPublicKey, akPublicArea, platform, ekCertPem, ekCertificateChain,
-                    tpmSelfReport, iosKeyId, iosAttestationObject, nonce);
+            return new EnrollRequestBlob(ekPublicKey, attestationKey, akPublicArea, platform, ekCertPem,
+                    ekCertificateChain, tpmSelfReport, iosKeyId, iosAttestationObject, nonce);
         }
     }
 }

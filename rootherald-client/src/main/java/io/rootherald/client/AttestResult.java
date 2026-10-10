@@ -2,6 +2,7 @@ package io.rootherald.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,38 +16,66 @@ import java.util.Optional;
  * siblings of {@code verdict} on the wire (NOT nested inside it), mirroring
  * {@code @rootherald/node}. Customers gate capabilities on
  * {@code assuranceClaimsMet} and drive the enroll-on-miss flow on
- * {@code enrollmentRequired}.
+ * {@code enrollmentRequired}. Attestation releases no key; keys come from
+ * {@link RootHeraldClient#certifyKey(String, String)}.
  *
  * @param verdict            the server's verdict token, {@link Verdict#PASS}, {@link Verdict#WARN}
  *                           or {@link Verdict#FAIL}; a response carrying any other token is refused
- * @param verdictNode        the full verdict object returned by the server
+ * @param verdictNode        the full verdict object returned by the server; every device field
+ *                           the server sends is under {@code device}
  * @param assuranceClaimsMet assurance-claim URNs the device satisfied; empty if absent, never {@code null}
- * @param enrollmentRequired {@code true} when the device is not enrolled and the caller
- *                           should drive the enroll / re-attestation flow before trusting the verdict
- * @param key                the key the appraisal certified, passed through as the server sent
- *                           it; the server sends one only on a passing verdict for a challenge
- *                           that asked for {@link ChallengeOptions#ASK_KEY}. A top-level sibling
- *                           of {@code verdict} on the wire
+ * @param enrollmentRequired {@code true} when the quote did not resolve to a live installation of
+ *                           yours; the client should enroll, and the verdict is not to be trusted
  */
 public record AttestResult(String verdict, JsonNode verdictNode,
-                           List<String> assuranceClaimsMet, boolean enrollmentRequired,
-                           Optional<CertifiedKey> key) {
+                           List<String> assuranceClaimsMet, boolean enrollmentRequired) {
 
     public AttestResult {
         assuranceClaimsMet = assuranceClaimsMet == null
                 ? List.of() : List.copyOf(assuranceClaimsMet);
-        key = key == null ? Optional.empty() : key;
-    }
-
-    /** A result with no certified key. */
-    public AttestResult(String verdict, JsonNode verdictNode,
-                        List<String> assuranceClaimsMet, boolean enrollmentRequired) {
-        this(verdict, verdictNode, assuranceClaimsMet, enrollmentRequired, Optional.empty());
     }
 
     /** True when the verdict is {@link Verdict#PASS}. */
     public boolean isPass() {
         return Verdict.PASS.equals(verdict);
+    }
+
+    /**
+     * This tenant's alias for the device ({@code verdict.device.ueid}), the
+     * same id {@link RelayActivateResponse#deviceId()} returned at
+     * enrollment. Empty when the disclosure class withholds it.
+     */
+    public Optional<String> deviceId() {
+        JsonNode d = device();
+        if (d == null || !d.hasNonNull("ueid") || !d.get("ueid").isTextual()) {
+            return Optional.empty();
+        }
+        String ueid = d.get("ueid").asText();
+        return ueid.isBlank() ? Optional.empty() : Optional.of(ueid);
+    }
+
+    /**
+     * What the challenge bound the verdict to, echoed by the server after it
+     * enforced it ({@code verdict.expected}). Empty when the challenge named
+     * nothing. {@link RootHeraldClient#verify(String, AttestOptions)} already
+     * compared it with the options it was given.
+     */
+    public Optional<ExpectedBinding> expected() {
+        JsonNode e = verdictNode == null ? null : verdictNode.get("expected");
+        if (e == null || !e.isObject()) {
+            return Optional.empty();
+        }
+        String key = e.hasNonNull("key") && e.get("key").isTextual() ? e.get("key").asText() : null;
+        List<String> devices = null;
+        if (e.hasNonNull("devices") && e.get("devices").isArray()) {
+            devices = new ArrayList<>();
+            for (JsonNode d : e.get("devices")) {
+                if (d.isTextual()) {
+                    devices.add(d.asText());
+                }
+            }
+        }
+        return Optional.of(new ExpectedBinding(key, devices));
     }
 
     /**
