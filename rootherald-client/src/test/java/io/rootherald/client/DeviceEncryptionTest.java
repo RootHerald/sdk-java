@@ -258,6 +258,99 @@ class DeviceEncryptionTest {
         assertArrayEquals(PLAINTEXT, ReferenceDecryptor.open(a, f.priv(), true));
     }
 
+    // ── Known-answer vectors from platform Fixtures/envelope ───────────────
+    //
+    // ECDH-ES replays byte for byte with the vector's ephemeral key and IV.
+    // RSA-OAEP-256 draws its OAEP seed from the SecureRandom between the CEK
+    // and the IV and the vector does not record it, so the header, IV,
+    // ciphertext and tag are byte-equal and the encrypted key must unwrap to
+    // the vector's CEK.
+
+    private static JsonNode vector(String file) throws Exception {
+        try (var in = DeviceEncryptionTest.class.getResourceAsStream("/envelope/" + file)) {
+            return new ObjectMapper().readTree(java.util.Objects.requireNonNull(in, file));
+        }
+    }
+
+    private static byte[] bytes(JsonNode v, String field) {
+        return B64D.decode(v.get(field).asText());
+    }
+
+    private static Jwk publicJwk(JsonNode privateJwk) {
+        return "EC".equals(privateJwk.get("kty").asText())
+                ? Jwk.ec(privateJwk.get("x").asText(), privateJwk.get("y").asText())
+                : Jwk.rsa(privateJwk.get("n").asText(), privateJwk.get("e").asText());
+    }
+
+    /** Serves one byte stream across every nextBytes call, so the CEK, seed and IV draw in order. */
+    static final class StreamRandom extends SecureRandom {
+        private static final long serialVersionUID = 1L;
+        private final byte[] stream;
+        private int offset;
+
+        StreamRandom(byte[]... chunks) {
+            int length = 0;
+            for (byte[] c : chunks) {
+                length += c.length;
+            }
+            stream = new byte[length];
+            int at = 0;
+            for (byte[] c : chunks) {
+                System.arraycopy(c, 0, stream, at, c.length);
+                at += c.length;
+            }
+        }
+
+        @Override
+        public void nextBytes(byte[] bytes) {
+            if (offset + bytes.length > stream.length) {
+                throw new IllegalStateException("drew " + (offset + bytes.length) + " bytes of " + stream.length);
+            }
+            System.arraycopy(stream, offset, bytes, 0, bytes.length);
+            offset += bytes.length;
+        }
+    }
+
+    @Test
+    void ecdhEsVectorReplaysByteForByte() throws Exception {
+        JsonNode v = vector("ecdh-es-a256gcm.json");
+        JsonNode e = v.get("ephemeral");
+        AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
+        params.init(new ECGenParameterSpec("secp256r1"));
+        ECParameterSpec spec = params.getParameterSpec(ECParameterSpec.class);
+        KeyFactory kf = KeyFactory.getInstance("EC");
+        KeyPair eph = new KeyPair(
+                kf.generatePublic(new ECPublicKeySpec(new ECPoint(new BigInteger(1, bytes(e, "x")), new BigInteger(1, bytes(e, "y"))), spec)),
+                kf.generatePrivate(new java.security.spec.ECPrivateKeySpec(new BigInteger(1, bytes(e, "d")), spec)));
+        CertifiedKey key = key(KeyChallengeOptions.PURPOSE_DECRYPT, "ECDH-ES", "jwe", publicJwk(v.get("recipient")));
+
+        String jwe = DeviceEncryption.encryptToDevice(key, bytes(v, "plaintext"), () -> eph, new StreamRandom(bytes(v, "iv")));
+
+        assertEquals(v.get("jwe").asText(), jwe);
+    }
+
+    @Test
+    void rsaOaep256VectorReplaysExceptTheOaepSeed() throws Exception {
+        JsonNode v = vector("rsa-oaep-256-a256gcm.json");
+        JsonNode r = v.get("recipient");
+        CertifiedKey key = key(KeyChallengeOptions.PURPOSE_DECRYPT, "RSA-OAEP-256", "jwe", publicJwk(r));
+
+        String jwe = DeviceEncryption.encryptToDevice(key, bytes(v, "plaintext"),
+                () -> { throw new IllegalStateException("RSA drew an ephemeral key"); },
+                new StreamRandom(bytes(v, "cek"), new byte[32], bytes(v, "iv")));
+
+        String[] expected = v.get("jwe").asText().split("\\.", -1);
+        String[] actual = jwe.split("\\.", -1);
+        for (int i : new int[] {0, 2, 3, 4}) {
+            assertEquals(expected[i], actual[i], "segment " + i);
+        }
+        PrivateKey priv = KeyFactory.getInstance("RSA").generatePrivate(new java.security.spec.RSAPrivateCrtKeySpec(
+                new BigInteger(1, bytes(r, "n")), new BigInteger(1, bytes(r, "e")), new BigInteger(1, bytes(r, "d")),
+                new BigInteger(1, bytes(r, "p")), new BigInteger(1, bytes(r, "q")), new BigInteger(1, bytes(r, "dp")),
+                new BigInteger(1, bytes(r, "dq")), new BigInteger(1, bytes(r, "qi"))));
+        assertArrayEquals(bytes(v, "cek"), ReferenceDecryptor.unwrap(B64D.decode(actual[1]), priv, MGF1ParameterSpec.SHA256));
+    }
+
     private static List<String> names(JsonNode node) {
         List<String> out = new ArrayList<>();
         for (Iterator<String> it = node.fieldNames(); it.hasNext();) {
