@@ -31,6 +31,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -228,6 +229,18 @@ public final class RootHeraldClient {
      * accept any device and answer a verdict with no {@code expected} block;
      * comparing the echo with what was asked turns that silence into a refusal.
      */
+    private static String normalizeAlias(String alias) {
+        return alias.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static Set<String> normalizeAliases(List<String> aliases) {
+        Set<String> out = new HashSet<>();
+        for (String alias : aliases) {
+            out.add(normalizeAlias(alias));
+        }
+        return out;
+    }
+
     private static void requireExpectedEnforced(AttestResult result, String expectedKey,
                                                 List<String> expectedDevices) {
         ExpectedBinding echoed = result.expected().orElse(null);
@@ -236,14 +249,16 @@ public final class RootHeraldClient {
                     "verify response did not echo the expectedKey the challenge named; the binding was not enforced");
         }
         if (expectedDevices != null) {
+            // Aliases are GUIDs: the server accepts any spelling and echoes lowercase.
+            Set<String> asked = normalizeAliases(expectedDevices);
             if (echoed == null || echoed.devices() == null
-                    || !new HashSet<>(echoed.devices()).equals(new HashSet<>(expectedDevices))) {
+                    || !normalizeAliases(echoed.devices()).equals(asked)) {
                 throw new ExpectedNotEnforcedException(
                         "verify response did not echo the expectedDevices the challenge named; the binding was not enforced");
             }
             Optional<String> ueid = result.deviceId();
             if (!Verdict.FAIL.equals(result.verdict()) && ueid.isPresent()
-                    && !expectedDevices.contains(ueid.get())) {
+                    && !asked.contains(normalizeAlias(ueid.get()))) {
                 throw new ExpectedNotEnforcedException(
                         "verify response names a device outside expectedDevices; the binding was not enforced");
             }

@@ -218,6 +218,16 @@ class RootHeraldClientTest {
     }
 
     @Test
+    void verifyComparesAliasesCaseInsensitively() throws Exception {
+        RootHeraldClient client = start("/api/v1/attest/verify", 200,
+                "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"},"
+                        + "\"expected\":{\"devices\":[\"dev-9\",\"dev-10\"]}}}");
+        AttestResult result = client.verify("{}", AttestOptions.of("n_1")
+                .expectedDevices(" DEV-9 ", "Dev-10"));
+        assertTrue(result.isPass());
+    }
+
+    @Test
     void verifyRefusesAVerdictThatDoesNotEchoTheBinding() throws Exception {
         RootHeraldClient client = start("/api/v1/attest/verify", 200,
                 "{\"verdict\":{\"device\":{\"verdict\":\"pass\",\"ueid\":\"dev-9\"}}}");
