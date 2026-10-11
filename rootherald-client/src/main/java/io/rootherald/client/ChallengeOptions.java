@@ -8,8 +8,13 @@ import java.util.List;
  * The challenge carries the ask: what the device has to prove is fixed when
  * the challenge is minted, not at verify time. Construct via
  * {@link #defaults()} and chain {@link #ask(String...)},
- * {@link #keyPurpose(String)} and {@link #deviceHint(String)} as needed.
- * Instances are immutable; each chained call returns a new one.
+ * {@link #expectedKey(String)} and {@link #expectedDevices(String...)} as
+ * needed. Instances are immutable; each chained call returns a new one.
+ * <p>
+ * Keys are never asked for here; they have their own ceremony
+ * ({@link RootHeraldClient#issueKeyChallenge(KeyChallengeOptions)}). A
+ * challenge that still asks for {@code "key"} is refused with 400
+ * {@code invalid_ask}.
  * <p>
  * There is no policy option. Policies bind to the API key, and the server
  * pins the resolved policy on the challenge when it is minted; a
@@ -18,35 +23,30 @@ import java.util.List;
  */
 public final class ChallengeOptions {
 
-    /** Ask: prove which enrolled device this is. */
+    /** Ask: prove which enrolled installation this is (quote under its AK). */
     public static final String ASK_IDENTITY = "identity";
     /** Ask: prove the boot / configuration state (quote + event log). */
     public static final String ASK_POSTURE = "posture";
-    /** Ask: certify a fresh TPM-resident signing key under the AK. */
-    public static final String ASK_KEY = "key";
-
-    /** The only key purpose today. */
-    public static final String KEY_PURPOSE_SIGN = "sign";
 
     private final List<String> ask;
-    private final String keyPurpose;
-    private final String deviceHint;
+    private final String expectedKey;
+    private final List<String> expectedDevices;
 
-    private ChallengeOptions(List<String> ask, String keyPurpose, String deviceHint) {
+    private ChallengeOptions(List<String> ask, String expectedKey, List<String> expectedDevices) {
         this.ask = ask == null ? null : List.copyOf(ask);
-        this.keyPurpose = keyPurpose;
-        this.deviceHint = deviceHint;
+        this.expectedKey = Aliases.textOrNull(expectedKey, "expectedKey");
+        this.expectedDevices = Aliases.copyOrNull(expectedDevices, "expectedDevices");
     }
 
-    /** No ask, key purpose or hint: the server's default of identity + posture. */
+    /** No ask and no binding: the server's default of identity + posture, from any device. */
     public static ChallengeOptions defaults() {
         return new ChallengeOptions(null, null, null);
     }
 
     /**
-     * What the device must prove: any of {@link #ASK_IDENTITY},
-     * {@link #ASK_POSTURE}, {@link #ASK_KEY}. Omitted (or empty) means the
-     * server default, identity + posture.
+     * What the device must prove: {@link #ASK_IDENTITY} and/or
+     * {@link #ASK_POSTURE}. Omitted (or empty) means the server default,
+     * identity + posture.
      */
     public ChallengeOptions ask(String... ask) {
         return ask(ask == null ? null : List.of(ask));
@@ -54,17 +54,34 @@ public final class ChallengeOptions {
 
     /** As {@link #ask(String...)}. */
     public ChallengeOptions ask(List<String> ask) {
-        return new ChallengeOptions(ask, keyPurpose, deviceHint);
+        return new ChallengeOptions(ask, expectedKey, expectedDevices);
     }
 
-    /** Purpose of the certified key when asking for {@link #ASK_KEY}; {@link #KEY_PURPOSE_SIGN}. */
-    public ChallengeOptions keyPurpose(String keyPurpose) {
-        return new ChallengeOptions(ask, keyPurpose, deviceHint);
+    /**
+     * The {@code keyId} of a key you certified. Only the installation holding
+     * that key can pass; any other answers a failing verdict with reason
+     * {@code expected_device_mismatch}. An unknown id is
+     * {@code 422 expected_unknown}. Pass the same value to
+     * {@link AttestOptions#expectedKey(String)}.
+     */
+    public ChallengeOptions expectedKey(String expectedKey) {
+        return new ChallengeOptions(ask, expectedKey, expectedDevices);
     }
 
-    /** Optional advisory device hint. */
-    public ChallengeOptions deviceHint(String deviceHint) {
-        return new ChallengeOptions(ask, keyPurpose, deviceHint);
+    /**
+     * Aliases ({@code verdict.device.ueid}) you enrolled. Only one of them can
+     * pass; any other device answers a failing verdict with reason
+     * {@code expected_device_mismatch}. An unknown alias is
+     * {@code 422 expected_unknown}. Pass the same values to
+     * {@link AttestOptions#expectedDevices(String...)}.
+     */
+    public ChallengeOptions expectedDevices(String... expectedDevices) {
+        return expectedDevices(expectedDevices == null ? null : List.of(expectedDevices));
+    }
+
+    /** As {@link #expectedDevices(String...)}. */
+    public ChallengeOptions expectedDevices(List<String> expectedDevices) {
+        return new ChallengeOptions(ask, expectedKey, expectedDevices);
     }
 
     /** The ask list, or {@code null} when left to the server default. */
@@ -72,11 +89,13 @@ public final class ChallengeOptions {
         return ask;
     }
 
-    public String keyPurpose() {
-        return keyPurpose;
+    /** The expected key id, or {@code null}. */
+    public String expectedKey() {
+        return expectedKey;
     }
 
-    public String deviceHint() {
-        return deviceHint;
+    /** The expected aliases, or {@code null}. */
+    public List<String> expectedDevices() {
+        return expectedDevices;
     }
 }

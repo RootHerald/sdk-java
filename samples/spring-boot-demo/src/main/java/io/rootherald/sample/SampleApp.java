@@ -5,6 +5,8 @@ import io.rootherald.client.AttestResult;
 import io.rootherald.client.CertifiedKey;
 import io.rootherald.client.Challenge;
 import io.rootherald.client.ChallengeOptions;
+import io.rootherald.client.KeyChallenge;
+import io.rootherald.client.KeyChallengeOptions;
 import io.rootherald.client.KeySignatures;
 import io.rootherald.client.RootHeraldClient;
 
@@ -21,15 +23,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Runnable Spring Boot sample of the Root Herald server -&gt; server flow with
- * a certified device key.
+ * Runnable Spring Boot sample of the Root Herald server -&gt; server flow:
+ * attest a device, mint a signing key on it, check its signatures locally.
  *
- * <p>Set {@code ROOTHERALD_SECRET_KEY} and the three routes come alive:
+ * <p>Set {@code ROOTHERALD_SECRET_KEY} and the routes come alive:
  * <ol>
- *   <li>{@code POST /challenge} — mint a challenge asking for identity,
- *       posture and a signing key; relay {@code challenge} to the client</li>
- *   <li>{@code POST /attest} — appraise the client's evidence; on a pass,
- *       keep the certified key</li>
+ *   <li>{@code POST /challenge} — mint a challenge asking for identity and
+ *       posture; relay {@code challenge} to the client</li>
+ *   <li>{@code POST /attest} — appraise the client's evidence; answers the
+ *       device's alias on a pass</li>
+ *   <li>{@code POST /key-challenge} — mint a key challenge for that device;
+ *       relay {@code keyChallenge} to the client</li>
+ *   <li>{@code POST /certify} — register the key the client minted; keep its JWK</li>
  *   <li>{@code POST /verify-signature} — check a later signature from the
  *       device against the stored key, locally, with no Root Herald call</li>
  * </ol>
@@ -60,8 +65,7 @@ public class SampleApp {
                 return notConfigured();
             }
             Challenge challenge = rh.issueChallenge(ChallengeOptions.defaults()
-                    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE, ChallengeOptions.ASK_KEY)
-                    .keyPurpose(ChallengeOptions.KEY_PURPOSE_SIGN));
+                    .ask(ChallengeOptions.ASK_IDENTITY, ChallengeOptions.ASK_POSTURE));
             return ResponseEntity.ok(challenge);
         }
 
@@ -81,15 +85,40 @@ public class SampleApp {
                         .body(Map.of("ok", false, "verdict", result.verdict(),
                                 "enrollmentRequired", result.enrollmentRequired()));
             }
-            // The key is present only on a pass for a challenge that asked for one.
-            result.key().ifPresent(k -> keys.put(k.keyId(), k));
             return ResponseEntity.ok(Map.of("ok", true, "verdict", result.verdict(),
-                    "keyId", result.key().map(CertifiedKey::keyId).orElse("")));
+                    "deviceId", result.deviceId().orElse("")));
         }
 
         /**
-         * 3) Later, the device signs something with its TPM-resident key. Check
-         * it against the JWK from the attestation; no Root Herald call.
+         * 3) Mint a key challenge for the device that just passed; hand
+         * {@code keyChallenge} to the client, whose MintKey answers with a
+         * certification.
+         */
+        @PostMapping("/key-challenge")
+        public ResponseEntity<?> keyChallenge(@RequestBody KeyChallengeBody body) {
+            if (rh == null) {
+                return notConfigured();
+            }
+            KeyChallenge challenge = rh.issueKeyChallenge(KeyChallengeOptions.of(KeyChallengeOptions.PURPOSE_SIGN)
+                    .expectedDevices(body.deviceId()));
+            return ResponseEntity.ok(challenge);
+        }
+
+        /** 4) Register the key the client minted; keep its public half. */
+        @PostMapping("/certify")
+        public ResponseEntity<Map<String, Object>> certify(@RequestBody CertifyBody body) {
+            if (rh == null) {
+                return notConfigured();
+            }
+            CertifiedKey key = rh.certifyKey(body.nonce(), body.certification());
+            keys.put(key.keyId(), key);
+            return ResponseEntity.ok(Map.of("keyId", key.keyId(), "deviceId", key.deviceId(),
+                    "alg", key.alg()));
+        }
+
+        /**
+         * 5) Later, the device signs something with its key. Check it against
+         * the JWK from the certification; no Root Herald call.
          */
         @PostMapping("/verify-signature")
         public ResponseEntity<Map<String, Object>> verifySignature(@RequestBody SignatureBody body) {
@@ -112,6 +141,14 @@ public class SampleApp {
 
     /** {@code nonce} is the handle from the challenge; {@code evidence} is the client's opaque JSON, passed through verbatim. */
     public record AttestBody(String nonce, String evidence) {
+    }
+
+    /** {@code deviceId} is the alias {@code /attest} answered. */
+    public record KeyChallengeBody(String deviceId) {
+    }
+
+    /** {@code nonce} is the handle from the key challenge; {@code certification} is the client's JSON, passed through verbatim. */
+    public record CertifyBody(String nonce, String certification) {
     }
 
     /** {@code message} and {@code signature} are base64. */

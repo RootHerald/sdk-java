@@ -13,6 +13,7 @@ import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.EllipticCurve;
+import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
 import java.util.Objects;
 
@@ -20,13 +21,20 @@ import java.util.Objects;
  * Verifies signatures made by a {@link CertifiedKey} on the device, using
  * only {@code java.security}.
  * <p>
- * The device signs with the TPM-resident key; the backend checks the
- * signature against the JWK it stored from the attestation. ECDSA over
- * SHA-256 for P-256 and SHA-384 for P-384. The signature may be either the
- * raw {@code r||s} concatenation the TPM emits (64 bytes for P-256, 96 for
- * P-384) or ASN.1 DER.
+ * The device signs with the key it minted; the backend checks the signature
+ * against the JWK it stored from {@link RootHeraldClient#certifyKey(String, String)}.
+ * An EC P-256 key checks ES256 (ECDSA over SHA-256), with the signature either
+ * the raw {@code r||s} the TPM emits (64 bytes) or ASN.1 DER. An RSA key
+ * checks RS256 (PKCS#1 v1.5 over SHA-256) with a modulus of at least 2048
+ * bits and a signature exactly the modulus length (256 bytes for RSA-2048).
+ * <p>
+ * A signature proves possession of the key at that moment, not how the
+ * machine booted; run an attest challenge for that.
  */
 public final class KeySignatures {
+
+    private static final int MIN_RSA_MODULUS_BITS = 2048;
+    private static final int P256_COORDINATE_BYTES = 32;
 
     private KeySignatures() {
     }
@@ -34,56 +42,86 @@ public final class KeySignatures {
     /**
      * @param jwk       the certified key's public half
      * @param message   the bytes that were signed (hashed here; do not pre-hash)
-     * @param signature raw {@code r||s} or DER-encoded ECDSA signature
+     * @param signature raw {@code r||s} or DER-encoded ECDSA signature, or a PKCS#1 v1.5 RSA signature
      * @return {@code true} only when the signature verifies; {@code false} for
      *         any malformed or non-matching signature — never throws for one
-     * @throws IllegalArgumentException when the JWK itself is not a P-256 /
-     *                                  P-384 EC key with decodable coordinates
+     * @throws IllegalArgumentException when the JWK itself is not a P-256 EC key
+     *                                  or an RSA key of at least 2048 bits with
+     *                                  decodable parameters
      */
     public static boolean verifyKeySignature(Jwk jwk, byte[] message, byte[] signature) {
         Objects.requireNonNull(jwk, "jwk");
         Objects.requireNonNull(message, "message");
+        if (jwk.isRsa()) {
+            return verifyRs256(jwk, message, signature);
+        }
+        if (jwk.isEc()) {
+            return verifyEs256(jwk, message, signature);
+        }
+        throw new IllegalArgumentException("jwk.kty must be EC or RSA (got " + jwk.kty() + ")");
+    }
+
+    private static boolean verifyEs256(Jwk jwk, byte[] message, byte[] signature) {
+        if (!Jwk.CRV_P256.equals(jwk.crv())) {
+            throw new IllegalArgumentException("jwk.crv must be P-256 (got " + jwk.crv() + ")");
+        }
+        PublicKey publicKey;
+        try {
+            publicKey = toEcPublicKey(jwk);
+        } catch (GeneralSecurityException | IllegalArgumentException ex) {
+            throw new IllegalArgumentException("jwk is not a usable EC public key: " + ex.getMessage(), ex);
+        }
         if (signature == null || signature.length == 0) {
             return false;
         }
 
-        Curve curve = Curve.of(jwk);
-        PublicKey publicKey;
-        try {
-            publicKey = toPublicKey(jwk, curve);
-        } catch (GeneralSecurityException | IllegalArgumentException ex) {
-            throw new IllegalArgumentException("jwk is not a usable EC public key: " + ex.getMessage(), ex);
-        }
-
-        int rawLength = 2 * curve.coordinateBytes;
-        if (signature.length == rawLength) {
-            if (verifyDer(publicKey, curve, message, rawToDer(signature))) {
+        if (signature.length == 2 * P256_COORDINATE_BYTES) {
+            if (verify("SHA256withECDSA", publicKey, message, rawToDer(signature))) {
                 return true;
             }
             // A DER signature is very unlikely to be exactly this long, but it
             // is possible; fall through and try it as DER before giving up.
-            return signature[0] == 0x30 && verifyDer(publicKey, curve, message, signature);
+            return signature[0] == 0x30 && verify("SHA256withECDSA", publicKey, message, signature);
         }
-        return verifyDer(publicKey, curve, message, signature);
+        return verify("SHA256withECDSA", publicKey, message, signature);
     }
 
-    private static boolean verifyDer(PublicKey publicKey, Curve curve, byte[] message, byte[] der) {
+    private static boolean verifyRs256(Jwk jwk, byte[] message, byte[] signature) {
+        BigInteger n = new BigInteger(1, base64Url(jwk.n(), "n"));
+        BigInteger e = new BigInteger(1, base64Url(jwk.e(), "e"));
+        if (n.bitLength() < MIN_RSA_MODULUS_BITS) {
+            throw new IllegalArgumentException("jwk.n must be at least " + MIN_RSA_MODULUS_BITS
+                    + " bits (got " + n.bitLength() + ")");
+        }
+        PublicKey publicKey;
         try {
-            Signature verifier = Signature.getInstance(curve.jcaAlgorithm);
+            publicKey = KeyFactory.getInstance("RSA").generatePublic(new RSAPublicKeySpec(n, e));
+        } catch (GeneralSecurityException | IllegalArgumentException ex) {
+            throw new IllegalArgumentException("jwk is not a usable RSA public key: " + ex.getMessage(), ex);
+        }
+        if (signature == null || signature.length != (n.bitLength() + 7) / 8) {
+            return false;
+        }
+        return verify("SHA256withRSA", publicKey, message, signature);
+    }
+
+    private static boolean verify(String algorithm, PublicKey publicKey, byte[] message, byte[] signature) {
+        try {
+            Signature verifier = Signature.getInstance(algorithm);
             verifier.initVerify(publicKey);
             verifier.update(message);
-            return verifier.verify(der);
+            return verifier.verify(signature);
         } catch (GeneralSecurityException | RuntimeException ex) {
             // Malformed DER, wrong length, r/s out of range: all "not verified".
             return false;
         }
     }
 
-    private static PublicKey toPublicKey(Jwk jwk, Curve curve) throws GeneralSecurityException {
+    private static PublicKey toEcPublicKey(Jwk jwk) throws GeneralSecurityException {
         BigInteger x = new BigInteger(1, base64Url(jwk.x(), "x"));
         BigInteger y = new BigInteger(1, base64Url(jwk.y(), "y"));
         AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
-        params.init(new ECGenParameterSpec(curve.jcaName));
+        params.init(new ECGenParameterSpec("secp256r1"));
         ECParameterSpec spec = params.getParameterSpec(ECParameterSpec.class);
         requireOnCurve(x, y, spec.getCurve());
         return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(new ECPoint(x, y), spec));
@@ -152,39 +190,10 @@ public final class KeySignatures {
         if (length < 0x80) {
             out.write(length);
         } else {
-            // Two P-384 integers fit in one length byte; a long form is only
-            // reachable with a longer curve than this class accepts.
+            // Two P-256 integers with padding are at most 70 bytes; the long
+            // form is only reachable with a longer curve than this class accepts.
             out.write(0x81);
             out.write(length);
-        }
-    }
-
-    private enum Curve {
-        P256("P-256", "secp256r1", "SHA256withECDSA", 32),
-        P384("P-384", "secp384r1", "SHA384withECDSA", 48);
-
-        final String jwkName;
-        final String jcaName;
-        final String jcaAlgorithm;
-        final int coordinateBytes;
-
-        Curve(String jwkName, String jcaName, String jcaAlgorithm, int coordinateBytes) {
-            this.jwkName = jwkName;
-            this.jcaName = jcaName;
-            this.jcaAlgorithm = jcaAlgorithm;
-            this.coordinateBytes = coordinateBytes;
-        }
-
-        static Curve of(Jwk jwk) {
-            if (!"EC".equals(jwk.kty())) {
-                throw new IllegalArgumentException("jwk.kty must be EC (got " + jwk.kty() + ")");
-            }
-            for (Curve c : values()) {
-                if (c.jwkName.equals(jwk.crv())) {
-                    return c;
-                }
-            }
-            throw new IllegalArgumentException("jwk.crv must be P-256 or P-384 (got " + jwk.crv() + ")");
         }
     }
 }
