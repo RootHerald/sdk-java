@@ -6,7 +6,7 @@
 
     <groupId>io.rootherald.samples</groupId>
     <artifactId>spring-boot-demo</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>jar</packaging>
 
     <name>RootHerald Spring Boot Demo</name>
@@ -32,7 +32,7 @@
         <dependency>
             <groupId>io.rootherald</groupId>
             <artifactId>rootherald-client</artifactId>
-            <version>0.2.0</version>
+            <version>0.3.0</version>
         </dependency>
     </dependencies>
 

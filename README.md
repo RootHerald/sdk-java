@@ -19,7 +19,7 @@ Wire 8.0 from `0.2.0`. A 7.0 client cannot enroll against an 8.0 server; see the
 <dependency>
   <groupId>io.rootherald</groupId>
   <artifactId>rootherald-client</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -119,6 +119,28 @@ Minting again for the same purpose rotates the key under the same `keyId`; a re-
 
 `verifyKeySignature(jwk, message, signature)` hashes `message` itself. ES256: a 64-byte signature is read as raw `r||s`, any other length as DER. RS256: PKCS#1 v1.5 over SHA-256, a modulus of at least 2048 bits, a signature exactly the modulus length (256 bytes). It returns `false` for any malformed or non-matching signature and throws `IllegalArgumentException` only for a JWK that is not a usable key.
 
+## Guarantee only a device can decrypt
+
+Mint a key with `PURPOSE_DECRYPT`, then encrypt to it from the backend; only the chip that holds the key opens the result. The private half, locked in the chip, signs and decrypts; the public half, in the JWK, verifies and encrypts.
+
+```java
+KeyChallenge keyChallenge = rh.issueKeyChallenge(
+    KeyChallengeOptions.of(KeyChallengeOptions.PURPOSE_DECRYPT)
+        .expectedDevices(result.deviceId().orElseThrow()));
+CertifiedKey key = rh.certifyKey(keyChallenge.nonce(), certificationJson);
+saveDeviceKey(key.deviceId(), key);
+
+// Later, without any Root Herald call: a session token only this device can
+// read. Send the JWE to the client; its RootHeraldDecrypt opens it.
+String jwe = DeviceEncryption.encryptToDevice(key, sessionTokenBytes);
+```
+
+`encryptToDevice(key, plaintext)` returns one JWE compact serialization: `ECDH-ES` with a fresh ephemeral P-256 key for an EC key, `RSA-OAEP-256` for an RSA key, `A256GCM` for both. Anyone holding the JWK can encrypt to the device.
+
+TPM keys (Windows, Linux) have `format()` `jwe` and are what this method encrypts to. A macOS key has `format()` `apple-ecies` and needs an Apple-side encryptor: `encryptToDevice` throws `EnvelopeFormatNotSupportedException` for it. iOS mints no decrypt key. A sign key, a key without a format, a curve other than P-256 or an RSA modulus under 2048 bits is `IllegalArgumentException`.
+
+A decrypt key minted in 8.1 has an empty auth value: any local process that can load the key's blob can open what was sent to it.
+
 ## Errors
 
 An un-enrolled or failing device is a verdict (`fail` / `warn`), **not** an exception. Only protocol, auth and budget problems throw, each exposing `statusCode()` and the server's `errorCode()`:
@@ -137,7 +159,7 @@ An un-enrolled or failing device is a verdict (`fail` / `warn`), **not** an exce
 | 429    | `budget_exhausted`, or an `X-RootHerald-Quota` header | `QuotaExceededException` (`budget()`) |
 | 429    | anything else                                         | `RateLimitedException`       |
 
-`InvalidAskException` is a programming error in your backend, not a device failure. `ActivationRefusedException` is `relayActivate` being refused for an unknown, spent or foreign `enrollmentId` or a wrong proof; the secret key was accepted. `RateLimitedException.retryAfterSeconds()` is the server's `Retry-After` (else the body's `retryAfterSeconds`, else `null`); `QuotaExceededException.budget()` names the budget that refused. `UnknownPolicyException` means a policy bound to the key no longer exists. Any other status, and a code no subclass covers (`posture_not_bound`, `plan_lapsed`), is a plain `RootHeraldApiException` with `errorCode()` preserved. A verdict that does not echo the `expectedKey` / `expectedDevices` you passed to `verify` is `ExpectedNotEnforcedException`. Input the SDK refuses locally, such as an empty nonce or a flat TPM enroll body, is `IllegalArgumentException` and makes no request.
+`InvalidAskException` is a programming error in your backend, not a device failure. `ActivationRefusedException` is `relayActivate` being refused for an unknown, spent or foreign `enrollmentId` or a wrong proof; the secret key was accepted. `RateLimitedException.retryAfterSeconds()` is the server's `Retry-After` (else the body's `retryAfterSeconds`, else `null`); `QuotaExceededException.budget()` names the budget that refused. `UnknownPolicyException` means a policy bound to the key no longer exists. Any other status, and a code no subclass covers (`posture_not_bound`, `plan_lapsed`), is a plain `RootHeraldApiException` with `errorCode()` preserved. A verdict that does not echo the `expectedKey` / `expectedDevices` you passed to `verify` is `ExpectedNotEnforcedException`. Input the SDK refuses locally, such as an empty nonce or a flat TPM enroll body, is `IllegalArgumentException` and makes no request; a decrypt key whose envelope `encryptToDevice` cannot produce (`apple-ecies`) is `EnvelopeFormatNotSupportedException`, a subclass of it.
 
 ## Spring Boot
 
