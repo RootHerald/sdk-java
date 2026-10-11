@@ -118,8 +118,11 @@ public final class KeySignatures {
     }
 
     private static PublicKey toEcPublicKey(Jwk jwk) throws GeneralSecurityException {
-        BigInteger x = new BigInteger(1, base64Url(jwk.x(), "x"));
-        BigInteger y = new BigInteger(1, base64Url(jwk.y(), "y"));
+        return ecPublicKey(new BigInteger(1, base64Url(jwk.x(), "x")), new BigInteger(1, base64Url(jwk.y(), "y")));
+    }
+
+    /** A P-256 public key from its affine coordinates, refused when the point is off the curve. */
+    static PublicKey ecPublicKey(BigInteger x, BigInteger y) throws GeneralSecurityException {
         AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
         params.init(new ECGenParameterSpec("secp256r1"));
         ECParameterSpec spec = params.getParameterSpec(ECParameterSpec.class);
