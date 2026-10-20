@@ -1087,8 +1087,7 @@ class RootHeraldClientTest {
         assertEquals(activateJson, lastBody.get());
     }
 
-    // Decoded, not constructed: Jackson binds through the canonical constructor
-    // and wraps its refusal, so these hold whatever that constructor's arity is.
+    // Jackson wraps the constructor's IllegalArgumentException in ValueInstantiationException.
     @Test
     void activationResponseRequiresEnrollmentIdAndExactlyOneProof() throws Exception {
         assertThrows(IllegalArgumentException.class,
