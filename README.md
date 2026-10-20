@@ -39,11 +39,10 @@ var rh = RootHeraldClient.builder()
 // refused with AdmissionRefusedException (422 admission_refused).
 RelayEnrollResult enroll = rh.relayEnroll(enrollBeginJson);
 
-// Hand enroll.challenge() (the 201 body) to the client's EnrollComplete(),
-// which returns { enrollmentId, decryptedSecret }; relay it to finish binding.
-EnrollActivationChallenge challenge = enroll.challenge().orElseThrow();
-RelayActivateResponse activated = rh.relayActivate(
-    EnrollActivationResponse.ofDecryptedSecret(challenge.enrollmentId(), decryptedSecret));
+// Hand enroll.challenge() (the 201 body) to the client's EnrollComplete() and
+// relay its body whole. On an AWS instance it also carries the NitroTPM document.
+EnrollActivationResponse activation = mapper.readValue(activateJson, EnrollActivationResponse.class);
+RelayActivateResponse activated = rh.relayActivate(activation);
 bindDeviceToUser(activated.deviceId());
 // deviceId is this tenant's alias for the device. Keep it here; never send it
 // to the client.
