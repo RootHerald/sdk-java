@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- `EnrollActivationResponse` carries `nitroAttestationDocument` and
+  `nitroDocumentError` (`NitroDocumentError`: `stage`, `tpmRc`,
+  `responseShape`), and `relayActivate` sends each one when it is set.
+
+### Breaking
+
+- The `EnrollActivationResponse` canonical constructor takes five components.
+
 ## 0.3.0
 
 Wire 8.1. A decrypt key minted with `KeyChallengeOptions.PURPOSE_DECRYPT`

@@ -588,6 +588,16 @@ public final class RootHeraldClient {
         if (activation.signature() != null) {
             body.put("signature", activation.signature());
         }
+        putIfSet(body, "nitroAttestationDocument", activation.nitroAttestationDocument());
+        if (activation.nitroDocumentError() != null) {
+            NitroDocumentError error = activation.nitroDocumentError();
+            ObjectNode e = body.putObject("nitroDocumentError");
+            putIfSet(e, "stage", error.stage());
+            if (error.tpmRc() != null) {
+                e.put("tpmRc", error.tpmRc());
+            }
+            putIfSet(e, "responseShape", error.responseShape());
+        }
 
         JsonNode data = post("api/v1/attest/activate", body);
         JsonNode deviceId = data.get("deviceId");

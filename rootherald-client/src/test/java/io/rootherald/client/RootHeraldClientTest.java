@@ -2,6 +2,7 @@ package io.rootherald.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.ValueInstantiationException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.rootherald.ActivationRefusedException;
@@ -1049,15 +1050,62 @@ class RootHeraldClientTest {
     }
 
     @Test
-    void activationResponseRequiresEnrollmentIdAndExactlyOneProof() {
+    void relayActivateRelaysTheNitroDocumentVerbatim() throws Exception {
+        String document = "0oRZ+/8AqQ+/hEShATgi==";
+        String activateJson = "{\"enrollmentId\":\"enr-3\",\"decryptedSecret\":\"secret==\","
+                + "\"nitroAttestationDocument\":\"" + document + "\"}";
+        RootHeraldClient client = start("/api/v1/attest/activate", 200, "{\"deviceId\":\"dev-3\"}");
+        client.relayActivate(mapper.readValue(activateJson, EnrollActivationResponse.class));
+        JsonNode sent = mapper.readTree(lastBody.get());
+        assertEquals(document, sent.get("nitroAttestationDocument").asText());
+        assertEquals(3, sent.size());
+        assertFalse(sent.has("nitroDocumentError"));
+    }
+
+    @Test
+    void relayActivateRelaysTheNitroDocumentError() throws Exception {
+        String[] errors = {
+                "{\"stage\":\"nsm_request\",\"tpmRc\":4294967295,\"responseShape\":\"a\\\"b\\\\c\"}",
+                "{\"stage\":\"nv_define_space\"}",
+        };
+        for (String error : errors) {
+            String activateJson = "{\"enrollmentId\":\"enr-4\",\"decryptedSecret\":\"secret==\","
+                    + "\"nitroDocumentError\":" + error + "}";
+            RootHeraldClient client = start("/api/v1/attest/activate", 200, "{\"deviceId\":\"dev-4\"}");
+            client.relayActivate(mapper.readValue(activateJson, EnrollActivationResponse.class));
+            JsonNode sent = mapper.readTree(lastBody.get());
+            assertEquals(mapper.readTree(error), sent.get("nitroDocumentError"), error);
+            assertFalse(sent.has("nitroAttestationDocument"), error);
+        }
+    }
+
+    @Test
+    void relayActivateWithoutNitroPostsTodaysBody() throws Exception {
+        String activateJson = "{\"enrollmentId\":\"enr-1\",\"decryptedSecret\":\"secret==\"}";
+        RootHeraldClient client = start("/api/v1/attest/activate", 200, "{\"deviceId\":\"dev-1\"}");
+        client.relayActivate(mapper.readValue(activateJson, EnrollActivationResponse.class));
+        assertEquals(activateJson, lastBody.get());
+    }
+
+    // Jackson wraps the constructor's IllegalArgumentException in ValueInstantiationException.
+    @Test
+    void activationResponseRequiresEnrollmentIdAndExactlyOneProof() throws Exception {
         assertThrows(IllegalArgumentException.class,
-                () -> new EnrollActivationResponse("", "secret==", null));
+                () -> EnrollActivationResponse.ofDecryptedSecret("", "secret=="));
         assertThrows(IllegalArgumentException.class,
-                () -> new EnrollActivationResponse("enr-1", "", null));
+                () -> EnrollActivationResponse.ofDecryptedSecret("enr-1", ""));
         assertThrows(IllegalArgumentException.class,
-                () -> new EnrollActivationResponse("enr-1", null, null));
-        assertThrows(IllegalArgumentException.class,
-                () -> new EnrollActivationResponse("enr-1", "secret==", "sig=="));
+                () -> EnrollActivationResponse.ofDecryptedSecret("enr-1", null));
+        assertThrows(ValueInstantiationException.class, () -> mapper.readValue(
+                "{\"enrollmentId\":\"enr-1\",\"decryptedSecret\":\"secret==\",\"signature\":\"sig==\"}",
+                EnrollActivationResponse.class));
+        assertThrows(ValueInstantiationException.class, () -> mapper.readValue(
+                "{\"enrollmentId\":\"enr-1\",\"nitroAttestationDocument\":\"d==\"}",
+                EnrollActivationResponse.class));
+        EnrollActivationResponse signedWithDocument = mapper.readValue(
+                "{\"enrollmentId\":\"enr-1\",\"signature\":\"sig==\",\"nitroAttestationDocument\":\"d==\"}",
+                EnrollActivationResponse.class);
+        assertEquals("sig==", signedWithDocument.signature());
     }
 
     @Test

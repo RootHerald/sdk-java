@@ -8,13 +8,19 @@ package io.rootherald.client;
  * carries the secret it released from the credential; a Secure Enclave carries
  * a signature over the challenge nonce. The server decides which proof to
  * demand from the platform recorded at enrollment, not from the body.
+ * <p>
+ * The client's activate JSON decodes into this record with Jackson
+ * ({@code mapper.readValue(json, EnrollActivationResponse.class)}).
  *
  * @param enrollmentId    the {@code enrollmentId} from the {@link EnrollActivationChallenge} (required)
  * @param decryptedSecret base64 of the secret released by {@code TPM2_ActivateCredential}, or {@code null}
  * @param signature       base64 ECDSA-P256-SHA256 signature over {@code challengeNonce}
  *                        (DER or IEEE-P1363), or {@code null}
+ * @param nitroAttestationDocument the NitroTPM attestation document on an AWS instance, or {@code null}
+ * @param nitroDocumentError       the client's report that the document could not be read, or {@code null}
  */
-public record EnrollActivationResponse(String enrollmentId, String decryptedSecret, String signature) {
+public record EnrollActivationResponse(String enrollmentId, String decryptedSecret, String signature,
+        String nitroAttestationDocument, NitroDocumentError nitroDocumentError) {
 
     public EnrollActivationResponse {
         if (enrollmentId == null || enrollmentId.isEmpty()) {
@@ -29,11 +35,11 @@ public record EnrollActivationResponse(String enrollmentId, String decryptedSecr
 
     /** A TPM's answer: the secret it released from the credential. */
     public static EnrollActivationResponse ofDecryptedSecret(String enrollmentId, String decryptedSecret) {
-        return new EnrollActivationResponse(enrollmentId, decryptedSecret, null);
+        return new EnrollActivationResponse(enrollmentId, decryptedSecret, null, null, null);
     }
 
     /** A Secure Enclave's answer: its signature over the challenge nonce. */
     public static EnrollActivationResponse ofSignature(String enrollmentId, String signature) {
-        return new EnrollActivationResponse(enrollmentId, null, signature);
+        return new EnrollActivationResponse(enrollmentId, null, signature, null, null);
     }
 }
